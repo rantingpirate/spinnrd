@@ -1,0 +1,6 @@
+[package]
+name = "spinnrd"
+version = "0.1.0"
+authors = ["James Wescott <james@wescottdesign.com>"]
+
+[dependencies]
