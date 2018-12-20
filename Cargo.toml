@@ -3,4 +3,29 @@ name = "spinnrd"
 version = "0.1.0"
 authors = ["James Wescott <james@wescottdesign.com>"]
 
+[features]
+sysd = ["systemd"]
+# Mostly for backends
+default	= ["fsaccel"]
+fsaccel	= ["regex","glob"]
+#~ iioaccel isn't written yet - need libiio bindings
+# iioaccel	= ["iio"]
+
 [dependencies]
+lazy_static	= "~1.2.0"
+daemonize	= "~0.3.0"
+simplelog	= "~0.5.3"
+chrono	= "~0.4.6"
+signal	= "~0.6.0"
+syslog	= "~4.0.1"
+# errno	= "~0.2.4"
+clap	= "~2.32.0"
+# libc	= "~0.2.44"
+log	= { version = "~0.4.6", features = ["std"] }
+
+# optional
+systemd	= { version = "~0.4.0", optional = true }
+
+# For fsaccel
+regex	= { version = "~1.1.0", optional = true }
+glob	= { version = "~0.2.11", optional = true }
