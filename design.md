@@ -176,13 +176,45 @@ info broadcasting for Linux. Or points me towards one I missed.
 
 
 # Filename Formatting
-*%e*: The current local epoch time (in seconds.nanoseconds)
-*%E*: The current UTC epoch time (in seconds.nanoseconds)
-*%f*: The spinnr directory
-*%d*: The current local date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS.NN±hhmm)
-*%u*: The current UTC date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS.NN±hhmm)
+`%e`: The current local epoch time (in seconds.nanoseconds)
+`%E`: The current UTC epoch time (in seconds.nanoseconds)
+`%d`: The spinnr directory
+`%t`: The current local date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS.NN±hhmm)
+`%u`: The current UTC date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS.NN±hhmm)
 
 # Opening the file to write it
 This was something of a hard decision for me. It requires more
 work to do, but it makes inotifywait _much_ more feasible to use,
 so it's just the way I'm going to go.
+
+# Command Line Options
+-	no pid file
+-	log level
+-	daemonize
+-	quiet
+-	verbose
+-	backend
+-	backend options
+-	delay
+-	polling interval
+
+## File locations
+-	pid file
+-	log file
+-	spinfile
+-	working directory
+
+## Accelerometer options
+-	hysteresis
+
+### FSAccel options
+-	location of accelerometer files
+-	scale
+-	fix int-as-uint
+
+## Specifying backend
+One of:
+-	`<backend_name>[:[option],[[option],...]]`
+-	subcommand
+-		but then how do I specify failover?
+
