@@ -10,6 +10,7 @@ extern crate chrono;
 extern crate signal;
 extern crate syslog;
 // extern crate errno;
+extern crate regex;
 extern crate clap;
 // extern crate libc;
 #[macro_use] extern crate log;
@@ -18,8 +19,6 @@ extern crate clap;
 extern crate systemd;
 
 // For fs-accel
-#[cfg(feature = "fsaccel")]
-extern crate regex;
 #[cfg(feature = "fsaccel")]
 extern crate glob;
 
@@ -30,6 +29,7 @@ use accel::{Accelerometer, FilteredAccelerometer};
 #[cfg(feature = "fsaccel")]
 use accel::fsaccel::FsAccelerometer;
 
+// use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::thread::sleep;
 use std::thread;
@@ -49,8 +49,9 @@ use daemonize::Daemonize;
 use clap::{Arg,ArgMatches};
 use signal::trap::Trap;
 use signal::Signal;
-// use chrono::{DateTime, Local};
+use chrono::{DateTime, TimeZone, Utc, Local};
 // use errno::{errno,Errno};
+use regex::{Regex,Captures};
 use log::{LevelFilter,SetLoggerError};
 use simplelog::WriteLogger;
 // use libc::{pid_t, fork, setsid, chdir, close};
@@ -86,10 +87,16 @@ const DELAY_NS_MULT: u32    = 1000000;
 const DELAY_SEC_DIV: u32   = 1000;
 
 /// The default pid file
-const DEFAULT_PID_FILE: &'static str = "/run/spinnr.pid";
+const DEFAULT_PID_FILE: &'static str = "/run/spinnrd.pid";
 
 /// The backup pid file
-const BACKUP_PID_FILE: &'static str = "/tmp/spinnr.pid";
+const BACKUP_PID_FILE: &'static str = "/tmp/spinnrd.pid";
+
+/// The default spinfile
+const DEFAULT_SPINFILE: &'static str = "spinnrd.spin";
+
+/// The default working directory
+const DEFAULT_WORKING_DIRECTORY: &'static str = "/run/spinnrd";
 
 /// The default logging level
 #[cfg(debug_assertions)]
@@ -102,6 +109,22 @@ const DEFAULT_LOG_FILE: &'static str = "syslog";
 
 /// The file to (try) to write the logging fail message to
 const LOG_FAIL_FILE: &'static str = "/tmp/spinnr.%t.logfail";
+
+/// Whether to quit by default on spinfile write error
+const DEFAULT_QUIT_ON_SPIN_WRITE_ERR: bool = false;
+// this gets logged and it shouldn't really happy anyway.
+
+/// Whether to quit by default on spinfile open error
+const DEFAULT_QUIT_ON_SPIN_OPEN_ERR: bool = true;
+// if we can't communicate there's no point in running...
+
+
+///# Formatting Arguments
+///`strftime` string for basic ISO 8601
+const STRF_8601_BASIC: &'static str = "%Y%m%dT%H%M%S%z";
+
+///`strftime` string for basic ISO 8601, with nanoseconds
+const STRF_8601_BASIC_NS: &'static str = "%Y%m%dT%H%M%S.%f%z";
 
 // the part where we define the command line arguments
 lazy_static!{
@@ -306,9 +329,9 @@ fn mainprog() -> i32 {
     // where m is the amount of time we're low-pass filtering over
     // times the frequency with which we're polling
     // (AKA the time we're filtering over divided by the period)
-    match init_accel(hyst as f64 / period as f64) {
-        Ok(accel,period,delay) => {
-            rval = runloop(accel, period, delay);
+    match init_orientator(hyst as f64 / period as f64) {
+        Ok(orientator) => {
+            rval = runloop(orientator, period, delay);
         },
         Err(e)  => {
             rval = e;
@@ -600,14 +623,9 @@ fn log_logging_failure<D: Display>(err: D) {
 }
 
 /// Returns true if we are to daemonize
+#[inline]
 fn is_daemon() -> bool {
-    //FIXME: writeme
-}
-
-/// Initialize the accelerometer
-fn init_accel<A: Accelerometer>(mult: f64) -> Result<FilteredAccelerometer<A>,i32> {
-    //FIXME: writeme
-    Ok(FilteredAccelerometer::new(accel, mult));
+    CLI_ARGS.is_present("daemonize")
 }
 
 /// Initializes the signal handler
@@ -620,11 +638,34 @@ fn init_sigtrap(sigs: &[Signal]) -> (thread::JoinHandle<()>, mpsc::Receiver<Sign
 }
 
 
+struct OrientatorOptions {
+    backend: String,
+    path: Option<String>,
+    scale: Option<u32>,
+    // iio_address: Option<iio_addr_t>,
+}
+
+/// Initialize an orientator
+fn init_orientator(mult: f64) -> Result<Box<dyn Orientator>,i32> {
+    //TODO: add multi-backend support
+    let opts = get_orientator_options();
+    //FIXME: writeme
+}
+fn get_orientator_options() -> OrientatorOptions {
+    //FIXME: writeme!
+    OrientatorOptions {
+        backend: "fsaccel",
+        path: None,
+        scale: None,
+    }
+}
+
 /// Something that can give the device's orientation.
 pub trait Orientator {
     /// Returns the current orientation, if it can figure it out.
     fn orientation(&mut self) -> Option<Rotation>;
 }
+
 
 impl<T: Accelerometer> Orientator for FilteredAccelerometer<T> {
     fn orientation(&mut self) -> Option<Rotation> {
@@ -691,35 +732,124 @@ impl Display for Rotation {
     }
 }
 
-/// Returns true if we're not writing to stdout.
+lazy_static! {
+    static ref NOW_UTC: DateTime<Utc> = Utc::now();
+    static ref NOW_LOCAL: DateTime<Local> = Local::now();
+}
+
+/// Returns true if the "quiet" flag was passed on the command line
+// #[inline]
 fn is_quiet() -> bool {
-    //FIXME: writeme
+    CLI_ARGS.is_present("quiet")
+}
+/// Returns true if we shouldn't write to stdout/stderr
+// #[inline]
+fn be_quiet() -> bool {
+    is_quiet() || is_daemon()
 }
 
 /// Gets the path to the pid file.
+#[inline]
 fn get_pid_file() -> PathBuf {
-    //FIXME: writeme
+    get_path("pidfile", DEFAULT_PID_FILE, false);
 }
 
 /// Gets the user spinnrd should run as
 fn get_user() -> daemonize::User {
+    CLI_ARGS.value_of("user")
+        .map_or_else(
+            |s| daemonize::uid_t::from(s)
+                .map_or_else(
+                    |_| daemonize::User::from(s),
+                    |n| daemonize::User::from(n)
+                    ),
+            || daemonize::User::from(current_user())
+            )
+}
+/// Gets the current user
+fn current_user() -> String {
     //FIXME: writeme
+    String::new();
 }
 
 /// Gets the group spinnrd should run as
 fn get_group() -> daemonize::Group {
+    CLI_ARGS.value_of("group")
+        .map_or_else(
+            |s| daemonize::uid_t::from(s)
+                .map_or_else(
+                    |_| daemonize::Group::from(s),
+                    |n| daemonize::Group::from(n)
+                    ),
+            || daemonize::Group::from(current_group())
+            )
+}
+/// Gets the current group
+fn current_group() -> String {
     //FIXME: writeme
+    String::new();
 }
 
 /// Get the location of the spinfile
+#[inline]
 fn get_spinfile() -> PathBuf {
-    //FIXME: writeme
+    get_path("spinfile", DEFAULT_SPINFILE, false)
+}
+fn full_timestamp<T: TimeZone>(time: DateTime<T>) -> String {
+}
+fn parse_path(input: &str, isdir: bool) -> String {
+    lazy_static! {
+        static ref PATH_RE: Regex = Regex::new(r"%(_?[eEdtTuUgG%]|([fF])\{(.*)\})");
+    }
+    PATH_RE.replace_all(input, |caps: &Captures| {
+        match caps[1] {
+            "e"  => format!("{}",NOW_UTC.timestamp()),
+            "_e" => format!("{}",NOW_UTC.millis()),
+    
+            "E"  => format!("{}.{}",
+                            NOW_UTC.timestamp(),
+                            NOW_UTC.timestamp_subsec_nanos()
+                            ),
+            "_E"  => format!("{}.{}",
+                             NOW_UTC.timestamp(),
+                             NOW_UTC.timestamp_subsec_millis()
+                             ),
+            "d"  => {
+                if isdir {"%d".to_owned()}
+                else { get_working_dir().to_str().unwrap_or("BADDIR") }
+            },
+            "t"  => NOW_LOCAL.format(STRF_8601_BASIC),
+            "_t" => NOW_LOCAL.format(STRF_8601_BASIC_NS),
+            "T"  => NOW_UTC.format(STRF_8601_BASIC),
+            "_T" => NOW_UTC.format(STRF_8601_BASIC_NS),
+            x    => {
+                //not sure this'll work, but it conveys the gist
+                if caps.length > 3 && 0 < caps[2].length {
+                    match caps[2] {
+                        "f" => NOW_LOCAL.format(caps[3]),
+                        "F" => NOW_UTC.format(caps[3]),
+                        _   => String::new(),
+                    }
+                } else {
+                    format!("%{}", x)
+                }
+            },
+        }
+    })
+}
+fn get_path(name: &str, default: &str, isdir: bool) -> PathBuf {
+    parse_path(CLI_ARGS.value_of(name).unwrap_or(default), isdir)
 }
 
 /// Get the working directory (where files go by default)
+#[inline]
 fn get_working_dir() -> PathBuf {
-    //FIXME: writeme
+    //TODO: Do I want to make sure it ends in a slash? Probably not...
+    get_path("workingdir", DEFAULT_WORKING_DIRECTORY, true)
 }
+
+/// Get the list of orientators to try
+
 
 /// Get the u32 value of an argument to a command-line option.
 /// Returns `None` if parsing fails.
@@ -744,13 +874,15 @@ fn validate_u32(v: String) -> Result<(), String> {
 /// Returns true if we should quit if an error occurs
 /// when writing to the spinfile
 fn quit_on_spinfile_write_error() -> bool {
-    //FIXME: writeme
+    //TODO: addopt
+    DEFAULT_QUIT_ON_SPIN_WRITE_ERR
 }
 
 /// Returns true if we should quit if an error occurs
 /// when opening the spinfile
 fn quit_on_spinfile_open_error() -> bool {
-    //FIXME: writeme
+    //TODO: addopt
+    DEFAULT_QUIT_ON_SPIN_OPEN_ERR
 }
 
 /// Remove the pid file at `p`.

@@ -176,11 +176,32 @@ info broadcasting for Linux. Or points me towards one I missed.
 
 
 # Filename Formatting
-`%e`: The current local epoch time (in seconds.nanoseconds)
+`%d`: The spinnr directory (not for working dir)
+`%e`: The current epoch time (in seconds)
+`%_e`: The current epoch time (in milliseconds)
 `%E`: The current UTC epoch time (in seconds.nanoseconds)
-`%d`: The spinnr directory
-`%t`: The current local date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS.NN±hhmm)
-`%u`: The current UTC date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS.NN±hhmm)
+`%_E`: The current epoch time (in seconds.milliseconds)
+`%f{FSTR}`: The current local date and time, formatted according to the `strftime` string FSTR
+`%F{FSTR}`: The current UTC date and time, formatted according to the `strftime` string FSTR
+`%t`: The current local date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS±hhmm)
+`%_t`: The current local date and time, in basic ISO 8601 format with nanoseconds (YYYYmmddTHHMMSS.NN±hhmm)
+`%T`: The current UTC date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS±hhmm)
+`%_T`: The current UTC date and time, in basic ISO 8601 format with nanoseconds (YYYYmmddTHHMMSS.NN±hhmm)
+`%%`: A literal '%'
+
+## Later
+These require some use of libc
+`%u`: The name of the running user
+`%_u`: The name of the calling user
+`%U`: The UID of the running user
+`%_U`: The UID of the calling user
+`%g`: The name of the group
+`%_g`: The name of the calling group
+`%G`: The GID of the group
+`%_G`: The GID of the calling group
+
+## Feep
+`%p`: The pid of the child process (spinfile only!)
 
 # Opening the file to write it
 This was something of a hard decision for me. It requires more
@@ -205,6 +226,12 @@ so it's just the way I'm going to go.
 -	working directory
 
 ## Accelerometer options
+### How to represent
+Originally I thought to use an enum, calling a function to return
+an Orientator (filtered or not), but it'd be a lot less work to
+just use a ~~HashMap~~ struct.
+
+### Universal options
 -	hysteresis
 
 ### FSAccel options
@@ -214,7 +241,7 @@ so it's just the way I'm going to go.
 
 ## Specifying backend
 One of:
--	`<backend_name>[:[option],[[option],...]]`
+-	`<backend_name>[,[option]...]`
 -	subcommand
 -		but then how do I specify failover?
 
