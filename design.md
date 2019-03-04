@@ -245,3 +245,9 @@ One of:
 -	subcommand
 -		but then how do I specify failover?
 
+Going with `backend[[,option=value]...][;backend[[,option=value]...]]`.
+
+# Passing backends
+I've cracked it! Use an enum, with typedef'd values, with the typedefs
+`cfg`-gated. Have a `DummyOrientator` struct, implementing the `Orientator`
+trait (just returns `Normal` orientation).

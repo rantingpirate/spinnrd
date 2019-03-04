@@ -1,8 +1,8 @@
 //! # spinnrd
-//!
-//! `spinnrd`, the spinnr daemon, translates accelerometer output
+//! spinnrd, the spinnr daemon, translates accelerometer output
 //! into screen orientation.
 
+// extern crate c_fixed_string;
 #[macro_use] extern crate lazy_static;
 extern crate daemonize;
 extern crate simplelog;
@@ -12,7 +12,7 @@ extern crate syslog;
 // extern crate errno;
 extern crate regex;
 extern crate clap;
-// extern crate libc;
+extern crate libc;
 #[macro_use] extern crate log;
 
 #[cfg(feature = "sysd")]
@@ -27,15 +27,23 @@ mod accel;
 
 use accel::{Accelerometer, FilteredAccelerometer};
 #[cfg(feature = "fsaccel")]
-use accel::fsaccel::FsAccelerometer;
+use accel::FsAccel;
+// #[cfg(feature = "fsaccel")]
+// type FsAccel_T = FsAccel;
+#[cfg(feature = "fsaccel")]
+type FilteredFsAccel_T = FilteredAccelerometer<FsAccel>;
+// #[cfg(not(feature = "fsaccel"))]
+// type FsAccel_T = DummyOrientator;
+#[cfg(not(feature = "fsaccel"))]
+type FilteredFsAccel_T = DummyOrientator;
 
-// use std::collections::HashMap;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::thread::sleep;
 use std::thread;
 use std::sync::mpsc;
 use std::fs::{File,remove_file,OpenOptions};
-// use std::ffi::CString;
+// use std::ffi::CStr;
 // use std::os::unix::io::AsRawFd;
 use std::io::Write;
 use std::path::{PathBuf};
@@ -45,6 +53,7 @@ use std::path::{PathBuf};
 use std::fmt::{Display, Formatter};
 use std::fmt::Result as FmtResult;
 
+// use c_fixed_string::CFixedStr;
 use daemonize::Daemonize;
 use clap::{Arg,ArgMatches};
 use signal::trap::Trap;
@@ -54,6 +63,11 @@ use chrono::{DateTime, TimeZone, Utc, Local};
 use regex::{Regex,Captures};
 use log::{LevelFilter,SetLoggerError};
 use simplelog::WriteLogger;
+// use libc::{uid_t,gid_t,getuid,getgid};
+use libc::{geteuid,getegid};
+// use libc::{getpwuid_r,getgrgid_r};
+// use libc::group as CGroup;
+// use libc::passwd as CPasswd;
 // use libc::{pid_t, fork, setsid, chdir, close};
 // use libc::{getpid, fcntl, flock, F_SETLK, SEEK_SET};
 
@@ -98,6 +112,12 @@ const DEFAULT_SPINFILE: &'static str = "spinnrd.spin";
 /// The default working directory
 const DEFAULT_WORKING_DIRECTORY: &'static str = "/run/spinnrd";
 
+/// The default backend options
+const DEFAULT_BACKEND_OPTS: &'static str = "";
+/// The default backend(s)
+// #[cfg(feature = "fsaccel")]
+const DEFAULT_BACKEND: &'static str = "fsaccel";
+
 /// The default logging level
 #[cfg(debug_assertions)]
 const DEFAULT_LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
@@ -125,6 +145,9 @@ const STRF_8601_BASIC: &'static str = "%Y%m%dT%H%M%S%z";
 
 ///`strftime` string for basic ISO 8601, with nanoseconds
 const STRF_8601_BASIC_NS: &'static str = "%Y%m%dT%H%M%S.%f%z";
+
+/// Error indicating no backend
+const ERR_NO_ORIENTATOR: i32 = -1313;
 
 // the part where we define the command line arguments
 lazy_static!{
@@ -212,7 +235,7 @@ lazy_static!{
             )
         .arg(Arg::with_name("backend")
              .long("backend")
-             .value_name("BACKEND[,[OPT]...][;BACKEND[,[OPT]...]]")
+             .value_name("BACKEND[[,OPT=VALUE]...][;BACKEND[[,OPT=VALUE]...]]")
              .value_delimiter(";")
              .help("Choose which backend(s) to get data from and set options")
              )
@@ -350,10 +373,10 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
     let spinfile = get_spinfile();
     // period is in ms, so multiply by 10^6 to get ns
     let period = Duration::new(
-        period / PERIOD_SEC_DIV,
+        (period / PERIOD_SEC_DIV) as u64,
         (period % PERIOD_SEC_DIV) * PERIOD_NS_MULT);
     let delay = Duration::new(
-        delay / DELAY_SEC_DIV,
+        (delay / DELAY_SEC_DIV) as u64,
         (delay % DELAY_SEC_DIV) * DELAY_NS_MULT);
 
     let mut orientation: Option<Rotation>;
@@ -394,7 +417,6 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
                                 error!("Error writing to spinfile! ({})", e);
                                 if quit_on_spinfile_write_error() {
                                     rval = 5;
-                                    //FIXME: Do I need to close sigrx?
                                     break 'mainloop
                                 }
                             }
@@ -403,7 +425,6 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
                             error!("Error opening spinfile! ({})", e);
                             if quit_on_spinfile_open_error() { // This defaults to true!
                                 rval = 4;
-                                //FIXME: Do I need to close sigrx?
                                 break 'mainloop
                             }
                         }
@@ -422,7 +443,7 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
 
 /// The type returned by init_logger upon failure to initialize a logger.
 // #[allow(missing_copy_implementations)]
-#[derive(Debug,PartialEq)]
+#[derive(Debug)]
 enum LoggingError {
     /// Error parsing the log level
     LogLevel(log::ParseLevelError, String),
@@ -443,19 +464,19 @@ impl Display for LoggingError {
         use LoggingError::*;
         match self {
             &LogLevel(e,s)  => {
-                write!(fmt, "couldn't parse log level '{}': {}", e, s);
+                write!(fmt, "couldn't parse log level '{}': {}", e, s)
             },
             &LogFile(e,p)   => {
-                write!(fmt, "couldn't open log file '{}': {}'", e, p);
+                write!(fmt, "couldn't open log file '{}': {}'", e, p.to_str().unwrap_or(""))
             },
             &SystemdDup(e) => {
-                write!(fmt, "couldn't initialize journald logging: {}", e);
+                write!(fmt, "couldn't initialize journald logging: {}", e)
             },
             &Syslog(e) => {
-                write!(fmt, "couldn't initialize syslog logging: {}", e);
+                write!(fmt, "couldn't initialize syslog logging: {}", e)
             }
             &FileDup(e)   => {
-                write!(fmt, "can't initialize multiple loggers: {}", e);
+                write!(fmt, "can't initialize multiple loggers: {}", e)
             }
         }
     }
@@ -478,11 +499,11 @@ impl std::error::Error for LoggingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         use LoggingError::*;
         match self {
-            &LogLevel(e,_)  => Some(e),
-            &LogFile(e,_)   => Some(e),
-            &SystemdDup(e) => Some(e),
-            &Syslog(e)  => Some(e),
-            &FileDup(e)   => Some(e),
+            &LogLevel(e,_)  => Some(&e),
+            &LogFile(e,_)   => Some(&e),
+            &SystemdDup(e) => Some(&e),
+            &Syslog(e)  => Some(&e),
+            &FileDup(e)   => Some(&e),
         }
     }
 }
@@ -499,7 +520,7 @@ impl Display for LogLocation {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         use LogLocation::*;
         match self {
-            &File(p)    => write!(f, "{}", p),
+            &File(p)    => write!(f, "{}", p.to_str().unwrap_or("")),
             &Systemd    => write!(f, "systemd journal"),
             &Syslog => write!(f, "syslog"),
         }
@@ -513,11 +534,10 @@ fn init_logger() -> LogInitResult {
     //FEEP: add filename parsing (e.g. `date`-style string)
     let logfile = CLI_ARGS.value_of("logfile").unwrap_or(DEFAULT_LOG_FILE);
 
-    let loglvl = CLI_ARGS.value_of("loglvl")
-        .map(|s|
-             log::LevelFilter::from_str(s)
-             .map_err(|e| LoggingError::LogLevel(e,s.to_owned()))?)
-        .unwrap_or(DEFAULT_LOG_LEVEL);
+    let loglvl = match CLI_ARGS.value_of("loglvl") {
+        Some(s) => s.parse().map_err(|e| LoggingError::LogLevel(e,s.to_owned()))?,
+        None    => DEFAULT_LOG_LEVEL,
+    };
 
     if "sysd" == logfile {
         init_sysd_journal(loglvl)
@@ -554,19 +574,20 @@ fn init_sysd_journal(level: LevelFilter) -> LogInitResult {
 /// Systemd support not compiled in - can't use it!
 #[cfg(not(feature = "sysd"))]
 fn init_sysd_journal(_level: LevelFilter) -> LogInitResult {
-    LoggingError::NoSystemd
+    Err(LoggingError::NoSystemd)
 }
 
 // as per
 // https://rust-lang-nursery.github.io/rust-cookbook/development_tools/debugging/log.html#log-to-the-unix-syslog
 /// Use the system log as the logger
 fn init_splatnix_syslog(level: LevelFilter) -> LogInitResult {
-    syslog::init(get_syslog_facility(),
-    level, 
-    Some("spinnrd"))
-        .map_or_else(
-            |e| LoggingError::Syslog(e),
-            |_| LogLocation::Syslog)
+    syslog::init(
+        get_syslog_facility(),
+        level, 
+        Some("spinnrd")
+        )
+        .map_err(|e| LoggingError::Syslog(e))
+        .map(|_| LogLocation::Syslog)
 }
 
 /// Get the appropriate syslog facility
@@ -585,18 +606,20 @@ fn init_logfile(loglvl: LevelFilter, logfile: &str) -> LogInitResult {
     WriteLogger::init(loglvl,
                       simplelog::Config::default(),
                       open_log_file(&logpath)?)
-        .map_or_else(
-            |e| LoggingError::FileDup(e),
-            |_| LogLocation::File(logpath))
+        .map_err(|e| LoggingError::FileDup(e))
+        .map(|_| LogLocation::File(logpath))
 }
 
 /// Open the log file
-fn open_log_file<W: Write + Send + 'static>(logfile: &PathBuf) -> Result<W,LoggingError> {
+// this would be generic but it's complaining about expecting a type
+// parameter and getting a std::fs::File
+// fn open_log_file<W: Write + Send + 'static>(logfile: &PathBuf) -> Result<W,LoggingError> {
+fn open_log_file(logfile: &PathBuf) -> Result<File,LoggingError> {
     OpenOptions::new()
         .append(true)
         .create(true)
         .open(logfile)
-        .map_err(|e| LoggingError::LogFile(e, logfile))
+        .map_err(|e| LoggingError::LogFile(e, logfile.to_owned()))
 }
 
 /// Log the failure to open a logfile
@@ -605,8 +628,8 @@ fn log_logging_failure<D: Display>(err: D) {
     // and might cause its own problems.
     let logfailfile = LOG_FAIL_FILE.replace(
         "%d",
-        chrono::Local::now()
-        .format("%Y%m%dT%H%M%S%.f%z"));
+        format!("{}", chrono::Local::now()
+                .format("%Y%m%dT%H%M%S%.f%z")).as_str());
 
     match File::create(logfailfile) {
         Ok(file)    => {
@@ -637,26 +660,171 @@ fn init_sigtrap(sigs: &[Signal]) -> (thread::JoinHandle<()>, mpsc::Receiver<Sign
     (handle, rx)
 }
 
+enum OrientatorKind {
+    //TODO: Add unfiltered variant
+    FsAccel(FilteredFsAccel_T),
+    // IioAccel(IioAccel_T),
+    // FaceCam(FaceCam_T),
+}
 
-struct OrientatorOptions {
-    backend: String,
-    path: Option<String>,
-    scale: Option<u32>,
-    // iio_address: Option<iio_addr_t>,
+impl Orientator for OrientatorKind {
+    fn orientation(&mut self) -> Option <Rotation> {
+        match self {
+            &mut OrientatorKind::FsAccel(a) => a.orientation(),
+            // &mut OrientatorKind::IioAccel(a)    => a.orientation(),
+            // &mut OrientatorKind::FaceCam(c) => c.orientation(),
+        }
+    }
+}
+
+struct DummyOrientator();
+impl Orientator for DummyOrientator {
+    fn orientation(&mut self) -> Option<Rotation> {
+        None
+    }
 }
 
 /// Initialize an orientator
-fn init_orientator(mult: f64) -> Result<Box<dyn Orientator>,i32> {
-    //TODO: add multi-backend support
-    let opts = get_orientator_options();
-    //FIXME: writeme
+fn init_orientator(mult: f64) -> Result<OrientatorKind,i32> {
+    macro_rules! orinit {
+        ( $tomatch:ident, $opts:ident: $( $name:expr, $init:ident );+ ) => {
+            match $tomatch.as_str() {
+                $(
+                    $name => {
+                        if ! $opts.contains_key($name) {
+                            $opts.insert($name.to_owned(), HashMap::new());
+                        }
+                        $init($opts[$name])
+                    }),*,
+                    _     => Err(BackendError::NoSuchBackend($tomatch)),
+            }
+        }
+    }
+
+    let (backends, opts) = get_backend_options();
+    for backend in backends {
+        let last_output =  orinit!(backend, opts:
+                // "iioaccel", init_iioaccel;
+                // "camaccel", init_camaccel;
+                "fsaccel", init_fsaccel
+                );
+        match last_output {
+            Ok(o)   => return Ok(o),
+            Err(e)  => warn!("Error initializing backend: {}", e),
+        }
+    }
+    return Err(ERR_NO_ORIENTATOR);
 }
-fn get_orientator_options() -> OrientatorOptions {
+
+// #[cfg(not(feature = "iioaccel"))]
+// fn init_iio
+
+type BackendResult = Result<OrientatorKind, BackendError>;
+
+#[cfg(feature = "fsaccel")]
+/// Initialize a filesystem accelerometer
+fn init_fsaccel(opts: HashMap<String, String>) -> BackendResult {
     //FIXME: writeme!
-    OrientatorOptions {
-        backend: "fsaccel",
-        path: None,
-        scale: None,
+    // this will probably be getting Option<type>s from the map then
+    // returning the init function implemented in the accel module
+    return Err(BackendError::NotCompiled("fsaccel"));
+}
+
+#[derive(Debug)]
+enum BackendError {
+    NotCompiled(&'static str),
+    NoSuchBackend(String),
+    FsAccel(FsAccelErr_T),
+}
+
+impl BackendError {
+    fn backend(&self) -> &str {
+        use BackendError::*;
+        match self {
+            &NotCompiled(s) => s,
+            &NoSuchBackend(s)   => &s[..],
+            &FsAccel(_) => "fsaccel",
+        }
+    }
+}
+
+impl Display for BackendError {
+    fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
+        use BackendError::*;
+        match self {
+            &NotCompiled(b) => {
+                write!(fmt, "backend '{}' is not compiled.", b)
+            },
+            &NoSuchBackend(b)   => {
+                write!(fmt, "backend '{}' does not exist!", b)
+            },
+            &FsAccel(e) => {
+                write!(fmt, "fsaccel init error: {}", e)
+            },
+        }
+    }
+}
+
+impl std::error::Error for BackendError {
+    fn description(&self) -> &str {
+        "couldn't initialize backend"
+    }
+
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // use BackendError::*;
+        match self {
+            &BackendError::NotCompiled(_)   => None,
+            &BackendError::NoSuchBackend(_) => None,
+            &BackendError::FsAccel(e) => Some(&e),
+        }
+    }
+}
+
+type FsAccelErr_T = std::io::Error;
+
+#[cfg(not(feature = "fsaccel"))]
+/// Don't initiaze a non-compiled filesystem accelerometer
+fn init_fsaccel(_opts: HashMap<String, String>) -> BackendResult {
+    return Err(BackendError::NotCompiled("fsaccel"));
+}
+
+/// Get backend options from command line
+fn get_backend_options() -> (Vec<String>, HashMap<String, HashMap<String, String>>) {
+    lazy_static! {
+        static ref BACKEND_RE: Regex = Regex::new(r"^(?P<backend>\w+)(?P<options>,(?:(?:[^;]*[^;\])?(?:\\\\)*\\;)*[^;]+)?").unwrap();
+    }
+    let backlist = Vec::new();
+    let optmap = HashMap::new();
+    let backends = CLI_ARGS.value_of("backend").unwrap_or(DEFAULT_BACKEND);
+    let backend_options = CLI_ARGS.value_of("backend_opts").unwrap_or(DEFAULT_BACKEND_OPTS);
+    for caps in BACKEND_RE.captures_iter(backend_options) {
+        let backend = &caps["backend"];
+        if ! optmap.contains_key(backend) {
+            optmap.insert(backend.to_owned(), HashMap::new());
+        }
+        parse_options(
+            &caps.name("options").map(|m| m.as_str()).unwrap_or(""),
+            optmap.get_mut(backend).unwrap());
+    }
+    for caps in BACKEND_RE.captures_iter(backends) {
+        let backend = &caps["backend"];
+        backlist.push(backend.to_owned());
+        parse_options(
+            &caps.name("options").map(|m| m.as_str()).unwrap_or(""),
+            optmap.get_mut(backend).unwrap());
+
+    }
+    return (backlist,optmap)
+}
+
+fn parse_options<'s>(optstr: &'s str, optmap: &mut HashMap<String, String>) {
+    lazy_static! {
+        static ref OPT_RE: Regex = Regex::new(r"[,;](?P<name>\w+)=(?P<value>(?:(?:[^,;]*[^,;\])?(?:\\{2})*\\[,;])*[^,;]+)").unwrap();
+    }
+    for caps in OPT_RE.captures_iter(optstr) {
+        //TODO: Un-escape commas and semicolons
+        optmap.insert((&caps["name"]).to_owned(), (&caps["value"]).to_owned());
+
     }
 }
 
@@ -751,44 +919,45 @@ fn be_quiet() -> bool {
 /// Gets the path to the pid file.
 #[inline]
 fn get_pid_file() -> PathBuf {
-    get_path("pidfile", DEFAULT_PID_FILE, false);
+    get_path("pidfile", DEFAULT_PID_FILE, false)
 }
 
 /// Gets the user spinnrd should run as
 fn get_user() -> daemonize::User {
     CLI_ARGS.value_of("user")
         .map_or_else(
-            |s| daemonize::uid_t::from(s)
-                .map_or_else(
-                    |_| daemonize::User::from(s),
-                    |n| daemonize::User::from(n)
-                    ),
-            || daemonize::User::from(current_user())
-            )
+            || daemonize::User::from(geteuid()),
+            |s| match s.parse() {
+                    Ok(n)   => daemonize::User::from(n),
+                    Err(_)  => daemonize::User::from(s)
+            })
 }
-/// Gets the current user
-fn current_user() -> String {
-    //FIXME: writeme
-    String::new();
-}
-
 /// Gets the group spinnrd should run as
 fn get_group() -> daemonize::Group {
     CLI_ARGS.value_of("group")
         .map_or_else(
-            |s| daemonize::uid_t::from(s)
-                .map_or_else(
-                    |_| daemonize::Group::from(s),
-                    |n| daemonize::Group::from(n)
-                    ),
-            || daemonize::Group::from(current_group())
-            )
+            || daemonize::Group::from(getegid()),
+            |s| match s.parse() {
+                    Ok(n)   => daemonize::Group::from(n),
+                    Err(_)  => daemonize::Group::from(s)
+            })
 }
-/// Gets the current group
-fn current_group() -> String {
-    //FIXME: writeme
-    String::new();
-}
+
+/*
+ * /// Gets the name corresponding to a uid
+ * fn get_uid_name(uid: uid_t) -> String {
+ *     //TODO: writeme
+ * 	let mut buf = mem::uninitialized::<[c_char; 256]>();
+ * 	let ptr = buf.as_ptr();
+ * 	let len = buf.len();
+ *     String::new();
+ * }
+ * /// Gets the group name corresponding to a gid
+ * fn get_gid_name(gid: gid_t) -> String {
+ *     //TODO: writeme
+ *     String::new();
+ * }
+ */
 
 /// Get the location of the spinfile
 #[inline]
@@ -796,15 +965,17 @@ fn get_spinfile() -> PathBuf {
     get_path("spinfile", DEFAULT_SPINFILE, false)
 }
 fn full_timestamp<T: TimeZone>(time: DateTime<T>) -> String {
+    //FIXME: writeme!
+    "a-full-timestamp".to_owned()
 }
 fn parse_path(input: &str, isdir: bool) -> String {
     lazy_static! {
-        static ref PATH_RE: Regex = Regex::new(r"%(_?[eEdtTuUgG%]|([fF])\{(.*)\})");
+        static ref PATH_RE: Regex = Regex::new(r"%(_?[eEdtTuUgG%]|([fF])\{(.*)\})").unwrap();
     }
     PATH_RE.replace_all(input, |caps: &Captures| {
-        match caps[1] {
+        match &caps[1] {
             "e"  => format!("{}",NOW_UTC.timestamp()),
-            "_e" => format!("{}",NOW_UTC.millis()),
+            "_e" => format!("{}",NOW_UTC.timestamp_millis()),
     
             "E"  => format!("{}.{}",
                             NOW_UTC.timestamp(),
@@ -816,18 +987,18 @@ fn parse_path(input: &str, isdir: bool) -> String {
                              ),
             "d"  => {
                 if isdir {"%d".to_owned()}
-                else { get_working_dir().to_str().unwrap_or("BADDIR") }
+                else { get_working_dir().to_str().unwrap_or("BADDIR").to_owned() }
             },
-            "t"  => NOW_LOCAL.format(STRF_8601_BASIC),
-            "_t" => NOW_LOCAL.format(STRF_8601_BASIC_NS),
-            "T"  => NOW_UTC.format(STRF_8601_BASIC),
-            "_T" => NOW_UTC.format(STRF_8601_BASIC_NS),
+            "t"  => format!("{}",NOW_LOCAL.format(STRF_8601_BASIC)),
+            "_t" => format!("{}",NOW_LOCAL.format(STRF_8601_BASIC_NS)),
+            "T"  => format!("{}",NOW_UTC.format(STRF_8601_BASIC)),
+            "_T" => format!("{}",NOW_UTC.format(STRF_8601_BASIC_NS)),
             x    => {
                 //not sure this'll work, but it conveys the gist
-                if caps.length > 3 && 0 < caps[2].length {
-                    match caps[2] {
-                        "f" => NOW_LOCAL.format(caps[3]),
-                        "F" => NOW_UTC.format(caps[3]),
+                if caps.len() > 3 && 0 < (&caps[2]).len() {
+                    match &caps[2] {
+                        "f" => format!("{}",NOW_LOCAL.format(&caps[3])),
+                        "F" => format!("{}",NOW_UTC.format(&caps[3])),
                         _   => String::new(),
                     }
                 } else {
@@ -835,10 +1006,10 @@ fn parse_path(input: &str, isdir: bool) -> String {
                 }
             },
         }
-    })
+    }).into_owned()
 }
 fn get_path(name: &str, default: &str, isdir: bool) -> PathBuf {
-    parse_path(CLI_ARGS.value_of(name).unwrap_or(default), isdir)
+    PathBuf::from(parse_path(CLI_ARGS.value_of(name).unwrap_or(default), isdir))
 }
 
 /// Get the working directory (where files go by default)
@@ -874,7 +1045,7 @@ fn validate_u32(v: String) -> Result<(), String> {
 /// Returns true if we should quit if an error occurs
 /// when writing to the spinfile
 fn quit_on_spinfile_write_error() -> bool {
-    //TODO: addopt
+    //TODO: addopt //addopt means add command line option
     DEFAULT_QUIT_ON_SPIN_WRITE_ERR
 }
 
