@@ -294,8 +294,8 @@ fn mainprog() -> i32 {
     if is_daemon() {
         info!("Attempting abyssal arachnid generation...");
         pidfile = Some(get_pid_file());
-        let daemon = Daemonize::new()
-            .pid_file(pidfile.unwrap())
+        /*let daemon =*/ Daemonize::new()
+            .pid_file(match &pidfile {Some(ref s) => s, None => panic!()})
             .chown_pid_file(true)
             .working_directory(get_working_dir())
             .user(get_user())
@@ -399,6 +399,7 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
             },
         } // match sigrx.try_recv()
 
+        orientation = orient.orientation();
         if orientation.is_some() {
             if last_change != orientation {
                 last_change = orientation;
@@ -408,10 +409,10 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
                     // Opening the file every write so inotifywait
                     // is easier (watch for CLOSE_WRITE once instead
                     // of MODIFY twice (open/truncate and write)).
-                    match File::create(spinfile) {
+                    match File::create(&spinfile) {
                         // unwrap is safe here because we've already checked
                         // that orientation isn't none
-                        Ok(f)   => match write!(f, "{}", orientation.unwrap()) {
+                        Ok(mut f)   => match write!(f, "{}", orientation.unwrap()) {
                             Ok(_)   => (),
                             Err(e)  => {
                                 error!("Error writing to spinfile! ({})", e);
@@ -463,19 +464,22 @@ impl Display for LoggingError {
     fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
         use LoggingError::*;
         match self {
-            &LogLevel(e,s)  => {
+            &LogLevel(ref e, ref s)  => {
                 write!(fmt, "couldn't parse log level '{}': {}", e, s)
             },
-            &LogFile(e,p)   => {
+            &LogFile(ref e, ref p)   => {
                 write!(fmt, "couldn't open log file '{}': {}'", e, p.to_str().unwrap_or(""))
             },
-            &SystemdDup(e) => {
+            &NoSystemd  => {
+                write!(fmt, "couldn't initialize systemd logging: systemd logging not built in")
+            },
+            &SystemdDup(ref e)  => {
                 write!(fmt, "couldn't initialize journald logging: {}", e)
             },
-            &Syslog(e) => {
+            &Syslog(ref e)  => {
                 write!(fmt, "couldn't initialize syslog logging: {}", e)
             }
-            &FileDup(e)   => {
+            &FileDup(ref e) => {
                 write!(fmt, "can't initialize multiple loggers: {}", e)
             }
         }
@@ -499,11 +503,12 @@ impl std::error::Error for LoggingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         use LoggingError::*;
         match self {
-            &LogLevel(e,_)  => Some(&e),
-            &LogFile(e,_)   => Some(&e),
-            &SystemdDup(e) => Some(&e),
-            &Syslog(e)  => Some(&e),
-            &FileDup(e)   => Some(&e),
+            &LogLevel(ref e,_)  => Some(e),
+            &LogFile(ref e,_)   => Some(e),
+            &NoSystemd  => None,
+            &SystemdDup(ref e)  => Some(e),
+            &Syslog(ref e)  => Some(e),
+            &FileDup(ref e) => Some(e),
         }
     }
 }
@@ -520,7 +525,7 @@ impl Display for LogLocation {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         use LogLocation::*;
         match self {
-            &File(p)    => write!(f, "{}", p.to_str().unwrap_or("")),
+            &File(ref p)    => write!(f, "{}", p.to_str().unwrap_or("")),
             &Systemd    => write!(f, "systemd journal"),
             &Syslog => write!(f, "syslog"),
         }
@@ -631,8 +636,8 @@ fn log_logging_failure<D: Display>(err: D) {
         format!("{}", chrono::Local::now()
                 .format("%Y%m%dT%H%M%S%.f%z")).as_str());
 
-    match File::create(logfailfile) {
-        Ok(file)    => {
+    match File::create(&logfailfile) {
+        Ok(mut file)    => {
             write!(file, "{}", err)
                 .unwrap_or_else(|e| eprintln!(
                         "Couldn't log logging error '{}' to {}. ({})",
@@ -670,7 +675,7 @@ enum OrientatorKind {
 impl Orientator for OrientatorKind {
     fn orientation(&mut self) -> Option <Rotation> {
         match self {
-            &mut OrientatorKind::FsAccel(a) => a.orientation(),
+            &mut OrientatorKind::FsAccel(ref mut a) => a.orientation(),
             // &mut OrientatorKind::IioAccel(a)    => a.orientation(),
             // &mut OrientatorKind::FaceCam(c) => c.orientation(),
         }
@@ -694,14 +699,15 @@ fn init_orientator(mult: f64) -> Result<OrientatorKind,i32> {
                         if ! $opts.contains_key($name) {
                             $opts.insert($name.to_owned(), HashMap::new());
                         }
-                        $init($opts[$name])
+                        $init(&$opts[$name])
                     }),*,
                     _     => Err(BackendError::NoSuchBackend($tomatch)),
             }
         }
     }
 
-    let (backends, opts) = get_backend_options();
+    //TODO: Need to handle mult
+    let (backends, mut opts) = get_backend_options();
     for backend in backends {
         let last_output =  orinit!(backend, opts:
                 // "iioaccel", init_iioaccel;
@@ -723,7 +729,7 @@ type BackendResult = Result<OrientatorKind, BackendError>;
 
 #[cfg(feature = "fsaccel")]
 /// Initialize a filesystem accelerometer
-fn init_fsaccel(opts: HashMap<String, String>) -> BackendResult {
+fn init_fsaccel(opts: &HashMap<String, String>) -> BackendResult {
     //FIXME: writeme!
     // this will probably be getting Option<type>s from the map then
     // returning the init function implemented in the accel module
@@ -741,8 +747,8 @@ impl BackendError {
     fn backend(&self) -> &str {
         use BackendError::*;
         match self {
-            &NotCompiled(s) => s,
-            &NoSuchBackend(s)   => &s[..],
+            &NotCompiled(ref s) => s,
+            &NoSuchBackend(ref s)   => &s[..],
             &FsAccel(_) => "fsaccel",
         }
     }
@@ -755,10 +761,10 @@ impl Display for BackendError {
             &NotCompiled(b) => {
                 write!(fmt, "backend '{}' is not compiled.", b)
             },
-            &NoSuchBackend(b)   => {
+            &NoSuchBackend(ref b)   => {
                 write!(fmt, "backend '{}' does not exist!", b)
             },
-            &FsAccel(e) => {
+            &FsAccel(ref e) => {
                 write!(fmt, "fsaccel init error: {}", e)
             },
         }
@@ -775,7 +781,7 @@ impl std::error::Error for BackendError {
         match self {
             &BackendError::NotCompiled(_)   => None,
             &BackendError::NoSuchBackend(_) => None,
-            &BackendError::FsAccel(e) => Some(&e),
+            &BackendError::FsAccel(ref e) => Some(e),
         }
     }
 }
@@ -793,8 +799,8 @@ fn get_backend_options() -> (Vec<String>, HashMap<String, HashMap<String, String
     lazy_static! {
         static ref BACKEND_RE: Regex = Regex::new(r"^(?P<backend>\w+)(?P<options>,(?:(?:[^;]*[^;\])?(?:\\\\)*\\;)*[^;]+)?").unwrap();
     }
-    let backlist = Vec::new();
-    let optmap = HashMap::new();
+    let mut backlist = Vec::new();
+    let mut optmap = HashMap::new();
     let backends = CLI_ARGS.value_of("backend").unwrap_or(DEFAULT_BACKEND);
     let backend_options = CLI_ARGS.value_of("backend_opts").unwrap_or(DEFAULT_BACKEND_OPTS);
     for caps in BACKEND_RE.captures_iter(backend_options) {
@@ -926,8 +932,8 @@ fn get_pid_file() -> PathBuf {
 fn get_user() -> daemonize::User {
     CLI_ARGS.value_of("user")
         .map_or_else(
-            || daemonize::User::from(geteuid()),
-            |s| match s.parse() {
+            || daemonize::User::from(unsafe{geteuid()}),
+            |s| match s.parse::<u32>() {
                     Ok(n)   => daemonize::User::from(n),
                     Err(_)  => daemonize::User::from(s)
             })
@@ -936,8 +942,8 @@ fn get_user() -> daemonize::User {
 fn get_group() -> daemonize::Group {
     CLI_ARGS.value_of("group")
         .map_or_else(
-            || daemonize::Group::from(getegid()),
-            |s| match s.parse() {
+            || daemonize::Group::from(unsafe{getegid()}),
+            |s| match s.parse::<u32>() {
                     Ok(n)   => daemonize::Group::from(n),
                     Err(_)  => daemonize::Group::from(s)
             })
@@ -964,35 +970,44 @@ fn get_group() -> daemonize::Group {
 fn get_spinfile() -> PathBuf {
     get_path("spinfile", DEFAULT_SPINFILE, false)
 }
-fn full_timestamp<T: TimeZone>(time: DateTime<T>) -> String {
-    //FIXME: writeme!
-    "a-full-timestamp".to_owned()
+
+macro_rules! timef {
+    ( $now:ident, $str:expr, $($func:ident),* ) => {
+        timef!(@inner $now, $str, $($func),*$(,)*)
+    };
+    ( $now:ident $func:ident ) => {
+        timef!(@inner $now, "{}", $func)
+    };
+    ( $now:ident $f1:ident $f2:ident ) => {
+        timef!(@inner $now, "{}.{}", $f1, $f2)
+    };
+    ( $now:ident: $str:expr ) => {
+        format!("{}",$now.format($str))
+    };
+    ( @inner $now:ident, $str:expr, $($func:ident),* ) => {
+        format!($str, $($now.$func()),*)
+    };
 }
+
 fn parse_path(input: &str, isdir: bool) -> String {
     lazy_static! {
         static ref PATH_RE: Regex = Regex::new(r"%(_?[eEdtTuUgG%]|([fF])\{(.*)\})").unwrap();
     }
     PATH_RE.replace_all(input, |caps: &Captures| {
         match &caps[1] {
-            "e"  => format!("{}",NOW_UTC.timestamp()),
-            "_e" => format!("{}",NOW_UTC.timestamp_millis()),
+            "e"  => timef!(NOW_UTC timestamp),
+            "_e" => timef!(NOW_UTC timestamp_millis),
     
-            "E"  => format!("{}.{}",
-                            NOW_UTC.timestamp(),
-                            NOW_UTC.timestamp_subsec_nanos()
-                            ),
-            "_E"  => format!("{}.{}",
-                             NOW_UTC.timestamp(),
-                             NOW_UTC.timestamp_subsec_millis()
-                             ),
+            "E"  => timef!(NOW_UTC timestamp timestamp_subsec_nanos),
+            "_E"  => timef!(NOW_UTC timestamp timestamp_subsec_millis),
             "d"  => {
                 if isdir {"%d".to_owned()}
                 else { get_working_dir().to_str().unwrap_or("BADDIR").to_owned() }
             },
-            "t"  => format!("{}",NOW_LOCAL.format(STRF_8601_BASIC)),
-            "_t" => format!("{}",NOW_LOCAL.format(STRF_8601_BASIC_NS)),
-            "T"  => format!("{}",NOW_UTC.format(STRF_8601_BASIC)),
-            "_T" => format!("{}",NOW_UTC.format(STRF_8601_BASIC_NS)),
+            "t"  => timef!(NOW_LOCAL: STRF_8601_BASIC),
+            "_t" => timef!(NOW_LOCAL: STRF_8601_BASIC_NS),
+            "T"  => timef!(NOW_UTC: STRF_8601_BASIC),
+            "_T" => timef!(NOW_UTC: STRF_8601_BASIC_NS),
             x    => {
                 //not sure this'll work, but it conveys the gist
                 if caps.len() > 3 && 0 < (&caps[2]).len() {
