@@ -341,17 +341,17 @@ pub struct FsAccelerometer {
 
 impl FsAccelerometer {
     /// Creates a new FsAccelerometer with the specified options.
-    pub fn from_opts(opts: &HashMap<String, &str>) -> IoResult<FsAccelerometer> {
+    pub fn from_opts(opts: &HashMap<String, String>) -> IoResult<FsAccelerometer> {
         let path = match opts.get("path") {
             Some(s) => PathBuf::from(s),
-            None    => guess_path(opts.get("path").unwrap_or(&DEFAULT_FSACCEL_PATH))?
+            None    => guess_path(opts.get("path").unwrap_or(&DEFAULT_FSACCEL_PATH.to_owned()))?
         };
         let scale: f64 = match opts.get("scale") {
             //TODO: Log before aborting
             Some(s) => s.parse::<f64>().expect("Scale must be a number"),
             None    => {
                 let mut scales = String::new();
-                let scalef = opts.get("scalefile").unwrap_or(&DEFAULT_SCALE_FILE);
+                let scalef = opts.get("scalefile").unwrap_or(&DEFAULT_SCALE_FILE.to_owned());
                 { f2s!(scalef, scales); }
                 scales.parse::<f64>().unwrap_or_else(|e| {
                     opts.get("defscale").unwrap_or_else(||
@@ -408,7 +408,6 @@ impl super::Accelerometer for FsAccelerometer {
 
 
 fn guess_path(base_path: &str) -> IoResult<PathBuf> {
-    //FIXME: writeme!
     for entry in glob(base_path).unwrap() {
         if let Ok(p) = entry {
             if p.deref().join("name").deref().is_file() {

@@ -28,12 +28,12 @@ mod accel;
 use accel::{Accelerometer, FilteredAccelerometer};
 #[cfg(feature = "fsaccel")]
 use accel::FsAccel;
-// #[cfg(feature = "fsaccel")]
-// type FsAccel_T = FsAccel;
+#[cfg(feature = "fsaccel")]
+type FsAccel_T = FsAccel;
 #[cfg(feature = "fsaccel")]
 type FilteredFsAccel_T = FilteredAccelerometer<FsAccel>;
-// #[cfg(not(feature = "fsaccel"))]
-// type FsAccel_T = DummyOrientator;
+#[cfg(not(feature = "fsaccel"))]
+type FsAccel_T = DummyOrientator;
 #[cfg(not(feature = "fsaccel"))]
 type FilteredFsAccel_T = DummyOrientator;
 
@@ -666,9 +666,10 @@ fn init_sigtrap(sigs: &[Signal]) -> (thread::JoinHandle<()>, mpsc::Receiver<Sign
 }
 
 enum OrientatorKind {
-    //TODO: Add unfiltered variant
     FsAccel(FilteredFsAccel_T),
-    // IioAccel(IioAccel_T),
+    FsAccelRaw(FsAccel_T),
+    // IioAccel(FilteredIioAccel_T),
+    // IioAccelRaw(IioAccel_T),
     // FaceCam(FaceCam_T),
 }
 
@@ -676,6 +677,7 @@ impl Orientator for OrientatorKind {
     fn orientation(&mut self) -> Option <Rotation> {
         match self {
             &mut OrientatorKind::FsAccel(ref mut a) => a.orientation(),
+            &mut OrientatorKind::FsAccelRaw(ref mut a) => a.orientation(),
             // &mut OrientatorKind::IioAccel(a)    => a.orientation(),
             // &mut OrientatorKind::FaceCam(c) => c.orientation(),
         }
@@ -699,14 +701,17 @@ fn init_orientator(mult: f64) -> Result<OrientatorKind,i32> {
                         if ! $opts.contains_key($name) {
                             $opts.insert($name.to_owned(), HashMap::new());
                         }
-                        $init(&$opts[$name])
+                        let mut sopts = $opts.get_mut($name).unwrap();
+                        if ! sopts.contains_key("mult") {
+                            sopts.insert("mult".to_owned(), mult.to_string());
+                        }
+                        $init(&sopts)
                     }),*,
                     _     => Err(BackendError::NoSuchBackend($tomatch)),
             }
         }
     }
 
-    //TODO: Need to handle mult
     let (backends, mut opts) = get_backend_options();
     for backend in backends {
         let last_output =  orinit!(backend, opts:
@@ -730,17 +735,21 @@ type BackendResult = Result<OrientatorKind, BackendError>;
 #[cfg(feature = "fsaccel")]
 /// Initialize a filesystem accelerometer
 fn init_fsaccel(opts: &HashMap<String, String>) -> BackendResult {
-    //FIXME: writeme!
-    // this will probably be getting Option<type>s from the map then
-    // returning the init function implemented in the accel module
-    return Err(BackendError::NotCompiled("fsaccel"));
+    match opts.get("mult") {
+        Some(m) => Ok(OrientatorKind::FsAccel(FilteredAccelerometer::new(
+                    FsAccel::from_opts(opts).map_err(|e| BackendError::FsAccel(e))?,
+                    m.parse::<f64>().map_err(|e| BackendError::MultNotFloat(m.to_owned(), e))?
+                    ))),
+        None    => Ok(OrientatorKind::FsAccelRaw(FsAccel::from_opts(opts).map_err(|e| BackendError::FsAccel(e))?)),
+    }
 }
 
 #[derive(Debug)]
 enum BackendError {
     NotCompiled(&'static str),
     NoSuchBackend(String),
-    FsAccel(FsAccelErr_T),
+    MultNotFloat(String, std::num::ParseFloatError),
+    FsAccel(std::io::Error),
 }
 
 impl BackendError {
@@ -785,8 +794,6 @@ impl std::error::Error for BackendError {
         }
     }
 }
-
-type FsAccelErr_T = std::io::Error;
 
 #[cfg(not(feature = "fsaccel"))]
 /// Don't initiaze a non-compiled filesystem accelerometer
@@ -841,7 +848,7 @@ pub trait Orientator {
 }
 
 
-impl<T: Accelerometer> Orientator for FilteredAccelerometer<T> {
+impl<T: Accelerometer> Orientator for T {
     fn orientation(&mut self) -> Option<Rotation> {
         let acc = self.read();
         if acc.z.abs() > 8.3385 { // 85% of g
