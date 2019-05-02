@@ -1,6 +1,6 @@
 [package]
 name = "spinnrd"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["James Wescott <james@wescottdesign.com>"]
 
 [features]
@@ -30,3 +30,6 @@ systemd	= { version = "~0.4.0", optional = true }
 
 # For fsaccel
 glob	= { version = "~0.2.11", optional = true }
+
+[build-dependencies]
+built = "0.3"

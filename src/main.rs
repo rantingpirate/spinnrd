@@ -23,6 +23,10 @@ extern crate systemd;
 extern crate glob;
 
 mod accel;
+#[allow(dead_code)]
+mod metadata {
+    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}
 
 
 use accel::{Accelerometer, FilteredAccelerometer};
@@ -153,12 +157,36 @@ const STRF_8601_BASIC_NS: &'static str = "%Y%m%dT%H%M%S.%f%z";
 /// Error indicating no backend
 const ERR_NO_ORIENTATOR: i32 = -1313;
 
+lazy_static!{
+    static ref VERSION: String = format!("{} ({})", metadata::PKG_VERSION, metadata::FEATURES_STR);
+    static ref FMT_HELP_STR: String = format!("FILENAME FORMATTING
+Filenames accept a few variables that will be expanded as follows:
+    %e: The current epoch time (in seconds)
+    %E: The current UTC epoch time (in seconds.nanoseconds)
+    %_e:    The current epoch time (in milliseconds)
+    %_E:    The current epoch time (in seconds.milliseconds)
+	%d:  The spinnr directory
+    %t:  The current local date and time, in basic ISO 8601 format to the 
+    nearest second (YYYYmmddTHHMMSS±hhmm)
+    %_t:  The current local date and time, in basic ISO 8601 format to the 
+    nearest nanosecond (YYYYmmddTHHMMSS.NN±hhmm)
+    %T:  The current UTC date and time, in basic ISO 8601 format to the 
+    nearest second (YYYYmmddTHHMMSS±hhmm)
+    %_T:  The current UTC date and time, in basic ISO 8601 format to the 
+    nearest nanosecond (YYYYmmddTHHMMSS.NN±hhmm)
+    %f{{<FORMAT>}} | %F{{<FORMAT}}:  The current (local | UTC) date and 
+        time, formatted according to the custom format string FORMAT 
+        (strftime-like, see 
+        https://docs.rs/chrono/{}/chrono/format/strftime/index.html for 
+        details). Use '%}}' to embed a '}}' in the format string.
+",chrono_ver());
+}
 // the part where we define the command line arguments
 lazy_static!{
     /// The command line arguments
     static ref CLI_ARGS: ArgMatches<'static> = clap::App::new("Spinnr")
 
-        .version("1.0.0")
+        .version((*VERSION).as_str())
         .author("James Wescott <james@wescottdesign.com>")
         .about("Parses accelerometer data into device rotation")
         .arg(Arg::with_name("quiet")
@@ -257,16 +285,17 @@ lazy_static!{
              .help("Set the verbosity of the logging.")
              .long_help("Values are listed in order of decreasing verbosity")
              )
-        .after_help("FILENAME FORMATTING
-Filenames accept a few variables that will be expanded as follows:
-	%e: The current local epoch time (in seconds.nanoseconds)
-	%E: The current UTC epoch time (in seconds.nanoseconds)
-	%d: The spinnr directory
-	%t: The current local date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS.NN±hhmm)
-	%u: The current UTC date and time, in basic ISO 8601 format (YYYYmmddTHHMMSS.NN±hhmm)
-")
-
+        .after_help((*FMT_HELP_STR).as_str())
         .get_matches();
+}
+
+fn chrono_ver() -> &'static str {
+    for item in metadata::DEPENDENCIES.iter() {
+        if let ("chrono", v) = item {
+            return v
+        }
+    }
+    return "latest"
 }
 
 
@@ -1023,7 +1052,32 @@ macro_rules! timef {
 
 fn parse_path(input: &str, isdir: bool) -> String {
     lazy_static! {
-        static ref PATH_RE: Regex = Regex::new(r"%(_?[eEdtTuUgG%]|([fF])\{(.*)\})").unwrap();
+        static ref PATH_RE: Regex = Regex::new(r"(?x)
+        # The basic matches
+        %(_?[eEdtTuUgG%]
+        # A custom format string
+        | ([fF]) \{
+            # The format string
+            (
+                # Allow %} to print close brace
+                (?:
+                    # Any number of non-close-brace characters (lazy)
+                    [^\}]*?
+                    # An optional (printed) close brace
+                    (?:
+                        # First, a non-'%' character
+                        [^%]
+                        # Any number of printed '%'s
+                        (?:%{2})*
+                        # Then '%}'
+                        %\}
+                    # Optionally
+                    )?
+                # Repeat any number of times and there you go!
+                )*
+            )
+        \}").unwrap();
+        static ref BRACE_RE: Regex = Regex::new(r"((?:%{2})*)%\}").unwrap();
     }
     PATH_RE.replace_all(input, |caps: &Captures| {
         match &caps[1] {
@@ -1043,9 +1097,10 @@ fn parse_path(input: &str, isdir: bool) -> String {
             x    => {
                 //not sure this'll work, but it conveys the gist
                 if caps.len() > 3 && 0 < (&caps[2]).len() {
+                    let fstr = BRACE_RE.replace_all(&caps[3], "${1}}").to_owned();
                     match &caps[2] {
-                        "f" => format!("{}",NOW_LOCAL.format(&caps[3])),
-                        "F" => format!("{}",NOW_UTC.format(&caps[3])),
+                        "f" => format!("{}",NOW_LOCAL.format(&fstr)),
+                        "F" => format!("{}",NOW_UTC.format(&fstr)),
                         _   => String::new(),
                     }
                 } else {
