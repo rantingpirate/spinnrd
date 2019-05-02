@@ -58,7 +58,11 @@ use daemonize::Daemonize;
 use clap::{Arg,ArgMatches};
 use signal::trap::Trap;
 use signal::Signal;
-use chrono::{DateTime, TimeZone, Utc, Local};
+use chrono::{DateTime, Utc, Local};
+// Apparantly I need this for some of the things I'm doing, even though it 
+// never gets used explicitly.
+#[allow(unused_imports)]
+use chrono::TimeZone;
 // use errno::{errno,Errno};
 use regex::{Regex,Captures};
 use log::{LevelFilter,SetLoggerError};
@@ -103,8 +107,8 @@ const DELAY_SEC_DIV: u32   = 1000;
 /// The default pid file
 const DEFAULT_PID_FILE: &'static str = "/run/spinnrd.pid";
 
-/// The backup pid file
-const BACKUP_PID_FILE: &'static str = "/tmp/spinnrd.pid";
+// /// The backup pid file
+// const BACKUP_PID_FILE: &'static str = "/tmp/spinnrd.pid";
 
 /// The default spinfile
 const DEFAULT_SPINFILE: &'static str = "spinnrd.spin";
@@ -451,6 +455,7 @@ enum LoggingError {
     /// Error opening (or writing to?) the log file
     LogFile(std::io::Error, PathBuf),
     /// Error initializing the journald connection
+    #[allow(dead_code)] // not always compiled
     SystemdDup(SetLoggerError),
     /// Can't initialize journald without systemd functionality
     NoSystemd,
@@ -516,8 +521,12 @@ impl std::error::Error for LoggingError {
 /// Where we're logging to
 #[derive(Debug, PartialEq)]
 enum LogLocation {
+    /// Logging to a file
     File(PathBuf),
+    /// Logging to systemd journald
+    #[allow(dead_code)] // not always compiled
     Systemd,
+    /// Logging to kernel/syslog
     Syslog,
 }
 
@@ -684,6 +693,7 @@ impl Orientator for OrientatorKind {
     }
 }
 
+#[allow(dead_code)] // doesn't need to be used, just needs to exist
 struct DummyOrientator();
 impl Orientator for DummyOrientator {
     fn orientation(&mut self) -> Option<Rotation> {
@@ -738,7 +748,7 @@ fn init_fsaccel(opts: &HashMap<String, String>) -> BackendResult {
     match opts.get("mult") {
         Some(m) => Ok(OrientatorKind::FsAccel(FilteredAccelerometer::new(
                     FsAccel::from_opts(opts).map_err(|e| BackendError::FsAccel(e))?,
-                    m.parse::<f64>().map_err(|e| BackendError::MultNotFloat(m.to_owned(), e))?
+                    m.parse::<f64>().map_err(|e| BackendError::MultNotFloat("fsaccel", m.to_owned(), e))?
                     ))),
         None    => Ok(OrientatorKind::FsAccelRaw(FsAccel::from_opts(opts).map_err(|e| BackendError::FsAccel(e))?)),
     }
@@ -746,22 +756,30 @@ fn init_fsaccel(opts: &HashMap<String, String>) -> BackendResult {
 
 #[derive(Debug)]
 enum BackendError {
+    /// Backend wasn't compiled in
+    #[allow(dead_code)] // not always compiled
     NotCompiled(&'static str),
+    /// Backend does not exist
     NoSuchBackend(String),
-    MultNotFloat(String, std::num::ParseFloatError),
+    /// Bad multiplier value for filtered accelerometer
+    MultNotFloat(&'static str, String, std::num::ParseFloatError),
+    /// Couldn't find/open filesystem accelerometer files
     FsAccel(std::io::Error),
 }
 
-impl BackendError {
-    fn backend(&self) -> &str {
-        use BackendError::*;
-        match self {
-            &NotCompiled(ref s) => s,
-            &NoSuchBackend(ref s)   => &s[..],
-            &FsAccel(_) => "fsaccel",
-        }
-    }
-}
+/*
+ * impl BackendError {
+ *     fn backend(&self) -> &str {
+ *         use BackendError::*;
+ *         match self {
+ *             &NotCompiled(ref s) => s,
+ *             &NoSuchBackend(ref s)   => &s[..],
+ *             &FsAccel(_) => "fsaccel",
+ *             &MultNotFloat(ref b,_,_) => b,
+ *         }
+ *     }
+ * }
+ */
 
 impl Display for BackendError {
     fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
@@ -775,6 +793,9 @@ impl Display for BackendError {
             },
             &FsAccel(ref e) => {
                 write!(fmt, "fsaccel init error: {}", e)
+            },
+            &MultNotFloat(ref b, ref s, ref e)  => {
+                write!(fmt, "bad mult value ({}) on filtered {}: {}", s, b, e)
             },
         }
     }
@@ -791,6 +812,7 @@ impl std::error::Error for BackendError {
             &BackendError::NotCompiled(_)   => None,
             &BackendError::NoSuchBackend(_) => None,
             &BackendError::FsAccel(ref e) => Some(e),
+            &BackendError::MultNotFloat(_,_,ref e)  => Some(e),
         }
     }
 }
@@ -923,11 +945,14 @@ lazy_static! {
 fn is_quiet() -> bool {
     CLI_ARGS.is_present("quiet")
 }
-/// Returns true if we shouldn't write to stdout/stderr
-// #[inline]
-fn be_quiet() -> bool {
-    is_quiet() || is_daemon()
-}
+
+/*
+ * /// Returns true if we shouldn't write to stdout/stderr
+ * // #[inline]
+ * fn be_quiet() -> bool {
+ *     is_quiet() || is_daemon()
+ * }
+ */
 
 /// Gets the path to the pid file.
 #[inline]

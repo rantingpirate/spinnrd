@@ -10,10 +10,6 @@ use std::fmt::Result as FmtResult;
 mod fsaccel;
 pub use self::fsaccel::FsAccelerometer as FsAccel;
 
-/// How long to "average" the accelerometer readings over
-/// when low-pass filtering (in ms)
-const DEFAULT_HYSTERESIS: u32 = 1000;
-
 
 /// Describes an acceleration vector.
 #[derive(Default, Debug, Clone, Copy)]
