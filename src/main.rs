@@ -29,13 +29,13 @@ use accel::{Accelerometer, FilteredAccelerometer};
 #[cfg(feature = "fsaccel")]
 use accel::FsAccel;
 #[cfg(feature = "fsaccel")]
-type FsAccel_T = FsAccel;
+type FsAccelT = FsAccel;
 #[cfg(feature = "fsaccel")]
-type FilteredFsAccel_T = FilteredAccelerometer<FsAccel>;
+type FilteredFsAccelT = FilteredAccelerometer<FsAccel>;
 #[cfg(not(feature = "fsaccel"))]
-type FsAccel_T = DummyOrientator;
+type FsAccelT = DummyOrientator;
 #[cfg(not(feature = "fsaccel"))]
-type FilteredFsAccel_T = DummyOrientator;
+type FilteredFsAccelT = DummyOrientator;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -666,11 +666,11 @@ fn init_sigtrap(sigs: &[Signal]) -> (thread::JoinHandle<()>, mpsc::Receiver<Sign
 }
 
 enum OrientatorKind {
-    FsAccel(FilteredFsAccel_T),
-    FsAccelRaw(FsAccel_T),
-    // IioAccel(FilteredIioAccel_T),
-    // IioAccelRaw(IioAccel_T),
-    // FaceCam(FaceCam_T),
+    FsAccel(FilteredFsAccelT),
+    FsAccelRaw(FsAccelT),
+    // IioAccel(FilteredIioAccelT),
+    // IioAccelRaw(IioAccelT),
+    // FaceCam(FaceCamT),
 }
 
 impl Orientator for OrientatorKind {

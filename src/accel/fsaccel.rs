@@ -304,14 +304,14 @@ macro_rules! unmapvars {
         unmapvars!(@inner $opts: $vars, ""; $($tail)*)
     };
     ( @inner $opts:ident: $var:ident, $def:expr; $($tail:tt)+ ) => {
-        let $var = $opts.get(stringify!($var)).unwrap_or(&$def);
+        let $var = $opts.get(stringify!($var)).unwrap_or(&$def.to_owned());
         unmapvars!(@inner $opts: $($tail)+)
     };
     ( @inner $opts:ident: $var:ident, $def:expr; ) => {
-        let $var = $opts.get(stringify!($var)).unwrap_or(&$def);
+        let $var = $opts.get(stringify!($var)).unwrap_or(&$def.to_owned());
     };
 }
-pub fn build_channels(chans: (&str, &str, &str), opts: &HashMap<String, &str>) -> IoResult<(Channel, Channel, Channel)> {
+pub fn build_channels(chans: (&str, &str, &str), opts: &HashMap<String, String>) -> IoResult<(Channel, Channel, Channel)> {
     unmapvars![opts:
         data_prefix, "in_accel_";
         // normally would insist on Path.join, but this app is
