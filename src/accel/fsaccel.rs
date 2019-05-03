@@ -97,6 +97,7 @@ impl std::fmt::Debug for ScanType {
 impl ScanType {
     /// Create a ScanType from the contents of a file
     pub fn from_file<P: AsRef<Path>>(path: P, fix_sign: bool) -> IoResult<ScanType> {
+        debug!("Creating scan type (fixing sign: {}) from file {}", fix_sign, path.as_ref().to_string_lossy());
         let mut contents = String::new();
         {
             let mut file = {File::open(path)?};
@@ -110,8 +111,9 @@ impl ScanType {
         lazy_static!{
             static ref SCANTYPE_RE: Regex = Regex::new(SCANTYPE_RE_STR).unwrap();
         }
-
-        let caps = SCANTYPE_RE.captures(contents.into()).unwrap();
+        let conts = contents.into();
+        debug!("Creating scan type (fixing sign: {}) from string {}", fix_sign, &conts);
+        let caps = SCANTYPE_RE.captures(conts).unwrap();
         let bits = caps["bit"].parse::<u8>().unwrap();
         let sbits = caps["sto"].parse::<u8>().unwrap();
         let sign = match caps.name("sign") {
@@ -119,7 +121,7 @@ impl ScanType {
             _           => DEFAULT_SIGNED,
         };
 
-        Ok(ScanType {
+        let rval = ScanType {
             endianness: match caps.name("end") {
             Some(s)   => Endian::from_str(s.as_str()),
                 _           => DEFAULT_ENDIANNESS,
@@ -162,7 +164,9 @@ impl ScanType {
             },
             // diffbits: (bits / 8) * 8 - bits,
             fix_sign: fix_sign,
-        })
+        };
+        debug!("ScanType: {:?}", rval);
+        return Ok(rval)
     }
 
     /// Convert the given number to a signed int.
@@ -179,34 +183,34 @@ impl ScanType {
 }
 
 fn _parse8(n: &str, _s: u8) -> i64 {
-    n.parse::<i8>().expect("Number parsing failed!") as i64
+    n.parse::<i8>().expect(&format!("Number parsing failed! ({})", n)) as i64
 }
 fn _parse16(n: &str, _s: u8) -> i64 {
-    n.parse::<i16>().expect("Number parsing failed!") as i64
+    n.parse::<i16>().expect(&format!("Number parsing failed! ({})", n)) as i64
 }
 fn _parse32(n: &str, _s: u8) -> i64 {
-    n.parse::<i32>().expect("Number parsing failed!") as i64
+    n.parse::<i32>().expect(&format!("Number parsing failed! ({})", n)) as i64
 }
 fn _parse64(n: &str, _s: u8) -> i64 {
-    n.parse::<i64>().expect("Number parsing failed!")
+    n.parse::<i64>().expect(&format!("Number parsing failed! ({})", n))
 }
 fn _parse128(n: &str, _s: u8) -> i64 {
-    (n.parse::<i128>().expect("Number parsing failed!") >>1) as i64
+    (n.parse::<i128>().expect(&format!("Number parsing failed! ({})", n)) >>1) as i64
 }
 fn _convus8(n: &str, _s: u8) -> i64 {
-    n.parse::<u8>().expect("Number parsing failed!") as i8 as i64
+    n.parse::<u8>().expect(&format!("Number parsing failed! ({})", n)) as i8 as i64
 }
 fn _convus16(n: &str, _s: u8) -> i64 {
-    n.parse::<u16>().expect("Number parsing failed!") as i16 as i64
+    n.parse::<u16>().expect(&format!("Number parsing failed! ({})", n)) as i16 as i64
 }
 fn _convus32(n: &str, _s: u8) -> i64 {
-    n.parse::<u32>().expect("Number parsing failed!") as i32 as i64
+    n.parse::<u32>().expect(&format!("Number parsing failed! ({})", n)) as i32 as i64
 }
 fn _convus64(n: &str, _s: u8) -> i64 {
-    n.parse::<u64>().expect("Number parsing failed!") as i64
+    n.parse::<u64>().expect(&format!("Number parsing failed! ({})", n)) as i64
 }
 fn _conv_unsigned_signed(num: &str, s: u8) -> i64 {
-    let n = num.parse::<u64>().expect("Number parsing failed!");
+    let n = num.parse::<u64>().expect(&format!("Number parsing failed! (i{} -> i64 '{}')", s, num));
     // Assuming 2's complement.
     if 0 == n & 1<<(s-1) {
         n as i64
@@ -215,7 +219,7 @@ fn _conv_unsigned_signed(num: &str, s: u8) -> i64 {
     }
 }
 fn _conv_unsigned(num: &str, s: u8) -> i64 {
-    let n = num.parse::<u64>().expect("Number parsing failed!");
+    let n = num.parse::<u64>().expect(&format!("Number parsing failed! (u{} -> i64 '{}') ", s, num));
     if n >= 1<<(s-1) {
         (n - 1<<(s-1)) as i64
     } else {
@@ -235,6 +239,7 @@ impl Channel {
     /// Create a new Channel at the given path, loading the ScanType from 
     /// the given file.
     pub fn new_from_file<P: AsRef<Path>,Q: AsRef<Path>>(id: &str, data_file: P, descr_file: Q, fix_sign: bool) -> IoResult<Channel> {
+        debug!("Creating new Channel {} from files:\ndata_file: {}\ndescr_file: {}\nfix_sign: {}", id, data_file.as_ref().to_string_lossy(), descr_file.as_ref().to_string_lossy(), fix_sign);
         Ok(Channel {
             id: id.to_owned(),
             scan: ScanType::from_file(descr_file.as_ref(), fix_sign)?,
@@ -310,14 +315,17 @@ macro_rules! unmapvars {
     ( @inner $opts:ident: $var:ident, $def:expr; $($tail:tt)+ ) => {
         let def_var = $def.to_owned();
         let $var = $opts.get(stringify!($var)).unwrap_or(&def_var);
-        unmapvars!(@inner $opts: $($tail)+)
+        unmapvars!(@inner $opts: $($tail)+);
+        debug!("{} = {}", stringify!($var), &$var);
     };
     ( @inner $opts:ident: $var:ident, $def:expr; ) => {
         let def_var = $def.to_owned();
         let $var = $opts.get(stringify!($var)).unwrap_or(&def_var);
+        debug!("{} = {}", stringify!($var), &$var);
     };
 }
 pub fn build_channels(chans: (&str, &str, &str), opts: &HashMap<String, String>) -> IoResult<(Channel, Channel, Channel)> {
+    debug!("Building channels {:?}", &chans);
     unmapvars![opts:
         data_prefix, "in_accel_";
         // normally would insist on Path.join, but this app is
@@ -325,15 +333,22 @@ pub fn build_channels(chans: (&str, &str, &str), opts: &HashMap<String, String>)
         desc_prefix, "scan_elements/in_accel_";
         data_suffix, "_raw";
         desc_suffix, "_type";
-        fix_scale, "true";
+        fix_scale, "false";
     ];
     let fs: bool = fix_scale.parse().expect("fix_scale must be 'true' or 'false'.");
+    let path = PathBuf::from(opts.get("path").unwrap_or(&DEFAULT_FSACCEL_PATH.to_owned()));
+    debug!("fs = {}", fs);
     macro_rules! newchan {
         ($($chan: expr),+) => {
             Ok(( $( newchan!(@inner $chan) ),+ ))
         };
         (@inner $chan: expr) => {
-            Channel::new_from_file($chan, format!("{}{}{}",data_prefix,$chan,data_suffix), format!("{}{}{}",desc_prefix,$chan,desc_suffix), fs)?
+            Channel::new_from_file(
+                $chan,
+                path.join(format!("{}{}{}",data_prefix,$chan,data_suffix)),
+                path.join(format!("{}{}{}",desc_prefix,$chan,desc_suffix)),
+                fs
+                )?
         };
     }
     newchan!(chans.0,chans.1,chans.2)
@@ -347,26 +362,34 @@ pub struct FsAccelerometer {
 
 impl FsAccelerometer {
     /// Creates a new FsAccelerometer with the specified options.
-    pub fn from_opts(opts: &HashMap<String, String>) -> IoResult<FsAccelerometer> {
-        let path = match opts.get("path") {
-            Some(s) => PathBuf::from(s),
-            None    => guess_path(opts.get("path").unwrap_or(&DEFAULT_FSACCEL_PATH.to_owned()))?
+    pub fn from_opts(opts: &mut HashMap<String, String>) -> IoResult<FsAccelerometer> {
+        debug!("Creating FsAccelerometer with the following options: {:?}", opts);
+        let haskey = opts.contains_key("path");
+        let path = match haskey {
+            true    => PathBuf::from(opts.get("path").unwrap()),
+            false   => {
+                let path = guess_path(&DEFAULT_FSACCEL_PATH.to_owned())?;
+                opts.insert("path".into(), path.to_string_lossy().into_owned());
+                path
+            },
         };
+        debug!("FsAccel path is {}", &path.to_string_lossy());
         let scale: f64 = match opts.get("scale") {
             //TODO: Log before aborting
             Some(s) => s.parse::<f64>().expect("Scale must be a number"),
             None    => {
                 let mut scales = String::new();
                 let def_scalef = DEFAULT_SCALE_FILE.to_owned();
-                let scalef = opts.get("scalefile").unwrap_or(&def_scalef);
-                { f2s!(path.join(scalef), scales); }
-                scales.parse::<f64>().unwrap_or_else(|e| {
+                let scalef = path.join(opts.get("scalefile").unwrap_or(&def_scalef));
+                { f2s!(&scalef, scales); }
+                scales.trim().parse::<f64>().unwrap_or_else(|e| {
                     opts.get("defscale").unwrap_or_else(||
-                        panic!(format!("Couldn't parse scale file {}: {}", scalef, e)))
+                            panic!(format!("Couldn't parse scale file {}: {}", &scalef.to_string_lossy(), e)))
                         .parse::<f64>().expect("default scale must be a number")
                 })
             }
         };
+        debug!("Scale is {}", &scale);
         Ok(FsAccelerometer {
             scale: scale,
             channels: build_channels(("x","y","z"), opts)?,

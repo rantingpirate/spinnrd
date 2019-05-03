@@ -106,15 +106,12 @@ pub struct FilteredAccelerometer<T> {
 }
 
 impl<T: Accelerometer> FilteredAccelerometer<T> {
-    pub fn new(accel: T, mult: f64) -> FilteredAccelerometer<T> {
+    pub fn new(mut accel: T, mult: f64) -> FilteredAccelerometer<T> {
+        let ival = accel.read();
         FilteredAccelerometer::<T> {
             accel: accel,
             mult: mult,
-            current: AccelerationVector::<f64> {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0
-            }
+            current: ival,
         }
     }
 

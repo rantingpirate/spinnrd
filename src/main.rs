@@ -87,6 +87,7 @@ use systemd::journal::JournalLog;
 /// The default interval between accelerometer polls (in ms)
 /// Note that this must stay in the same units as the hysteresis!
 const DEFAULT_PERIOD: u32   = 150;
+const DEFAULT_PERIOD_STR: &str  = "150";
 
 /// Multiply by the period to get nanoseconds
 const PERIOD_NS_MULT: u32   = 1000000;
@@ -97,16 +98,21 @@ const PERIOD_SEC_DIV: u32   = 1000;
 /// The default amount of time we're filtering over (in ms)
 /// Note that this must stay in the same units as the period!
 const DEFAULT_HYSTERESIS: u32   = 1000;
+const DEFAULT_HYSTERESIS_STR: &str  = "1000";
 
 // This helps filter out transitional rotations, i.e. when turning the screen 180°
 /// The default delay before committing an orientation change (in ms)
 const DEFAULT_DELAY: u32    = 350;
+const DEFAULT_DELAY_STR: &str   = "350";
 
 /// Multiply by the delay to get nanoseconds
 const DELAY_NS_MULT: u32    = 1000000;
 
 /// Divide the delay by this to get seconds
 const DELAY_SEC_DIV: u32   = 1000;
+
+const DEFAULT_SENSITIVITY: f64 = 5.0;
+const DEFAULT_SENSITIVITY_STR: &str = "5.0";
 
 /// The default pid file
 const DEFAULT_PID_FILE: &'static str = "/run/spinnrd.pid";
@@ -181,6 +187,8 @@ Filenames accept a few variables that will be expanded as follows:
         details). Use '%}}' to embed a '}}' in the format string.
 ",chrono_ver());
 }
+//FIXME: Document the freaking backend options!!!
+
 // the part where we define the command line arguments
 lazy_static!{
     /// The command line arguments
@@ -200,6 +208,7 @@ lazy_static!{
              .validator(validate_u32)
              .help("Set the polling interval in milliseconds")
              .value_name("PERIOD")
+             .default_value(DEFAULT_PERIOD_STR)
             )
         .arg(Arg::with_name("hysteresis")
              .long("hysteresis")
@@ -207,7 +216,16 @@ lazy_static!{
              .validator(validate_u32)
              .help("How long to average the accelerometer inputs over, in milliseconds")
              .value_name("HYSTERESIS")
+             .default_value(DEFAULT_HYSTERESIS_STR)
             )
+        .arg(Arg::with_name("sensitivity")
+             .long("sensitivity")
+             .short("s")
+             .validator(validate_f64)
+             .help("The higher this is, the flatter we'll detect a rotation")
+             .value_name("SENSITIVITY")
+             .default_value(DEFAULT_SENSITIVITY_STR)
+             )
         /*
          * .arg(Arg::with_name("wait")
          *      .short("w")
@@ -264,6 +282,7 @@ lazy_static!{
              .value_name("DELAY")
              .validator(validate_u32)
              .help("Wait for orientation to be stable for DELAY milliseconds before rotating display.")
+             .default_value(DEFAULT_DELAY_STR)
             )
         .arg(Arg::with_name("backend")
              .long("backend")
@@ -298,6 +317,9 @@ fn chrono_ver() -> &'static str {
     return "latest"
 }
 
+lazy_static! {
+    static ref SENSITIVITY: f64 = get_f64_arg_val("sensitivity").unwrap_or(DEFAULT_SENSITIVITY);
+}
 
 fn main() {
     // lets us exit with status - important for running under systemd, etc.
@@ -385,7 +407,7 @@ fn mainprog() -> i32 {
     // where m is the amount of time we're low-pass filtering over
     // times the frequency with which we're polling
     // (AKA the time we're filtering over divided by the period)
-    match init_orientator(hyst as f64 / period as f64) {
+    match init_orientator(period as f64 / (hyst as f64)) {
         Ok(orientator) => {
             rval = runloop(orientator, period, delay);
         },
@@ -400,7 +422,7 @@ fn mainprog() -> i32 {
     return rval;
 }
 
-pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
+fn runloop(mut orient: OrientatorKind, period: u32, delay: u32) -> i32 {
     let (handle, sigrx) = init_sigtrap(&[Signal::SIGHUP,Signal::SIGINT,Signal::SIGTERM]);
 
     let spinfile = get_spinfile();
@@ -413,6 +435,7 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
         (delay % DELAY_SEC_DIV) * DELAY_NS_MULT);
 
     let mut orientation: Option<Rotation>;
+    let mut last_written: Option<Rotation> = None;
     let mut last_change: Option<Rotation> = None;
     let mut last_change_time = Instant::now();
 
@@ -421,7 +444,7 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
     'mainloop: loop {
         match sigrx.try_recv() {
             Ok(s)   => {
-                warn!("\nRecieved {:?}, closing...", s);
+                warn!("Recieved {:?}, closing...", s);
                 break 'mainloop
             },
             Err(mpsc::TryRecvError::Empty)  => {},
@@ -434,19 +457,22 @@ pub fn runloop<O: Orientator>(mut orient: O, period: u32, delay: u32) -> i32 {
 
         orientation = orient.orientation();
         if orientation.is_some() {
+            debug!("Orientation is {}", orientation.unwrap());
             if last_change != orientation {
                 last_change = orientation;
                 last_change_time = Instant::now();
             } else {
-                if last_change_time.elapsed() >= delay {
+                if last_change != last_written && last_change_time.elapsed() >= delay {
+                    info!("Writing {} to {}", orientation.unwrap(), &spinfile.to_string_lossy());
                     // Opening the file every write so inotifywait
                     // is easier (watch for CLOSE_WRITE once instead
                     // of MODIFY twice (open/truncate and write)).
                     match File::create(&spinfile) {
-                        // unwrap is safe here because we've already checked
+                        // unwrap is safe here because we've already 
+                        // checked
                         // that orientation isn't none
                         Ok(mut f)   => match write!(f, "{}", orientation.unwrap()) {
-                            Ok(_)   => (),
+                            Ok(_)   => {last_written = orientation;},
                             Err(e)  => {
                                 error!("Error writing to spinfile! ({})", e);
                                 if quit_on_spinfile_write_error() {
@@ -733,18 +759,14 @@ impl Orientator for DummyOrientator {
 /// Initialize an orientator
 fn init_orientator(mult: f64) -> Result<OrientatorKind,i32> {
     macro_rules! orinit {
-        ( $tomatch:ident, $opts:ident: $( $name:expr, $init:ident );+ ) => {
+        ( $tomatch:ident, $opts:ident: $( $name:expr, $init:ident $(, $mult:expr)* );+ $(;)* ) => {
             match $tomatch.as_str() {
                 $(
                     $name => {
                         if ! $opts.contains_key($name) {
                             $opts.insert($name.to_owned(), HashMap::new());
                         }
-                        let mut sopts = $opts.get_mut($name).unwrap();
-                        if ! sopts.contains_key("mult") {
-                            sopts.insert("mult".to_owned(), mult.to_string());
-                        }
-                        $init(&sopts)
+                        $init($opts.get_mut($name).unwrap() $(, $mult)*)
                     }),*,
                     _     => Err(BackendError::NoSuchBackend($tomatch)),
             }
@@ -754,9 +776,11 @@ fn init_orientator(mult: f64) -> Result<OrientatorKind,i32> {
     let (backends, mut opts) = get_backend_options();
     for backend in backends {
         let last_output =  orinit!(backend, opts:
-                // "iioaccel", init_iioaccel;
+                // "iioaccel", init_iioaccel, Some(mult);
+                // "iioaccel_raw", init_iioaccel, None;
                 // "camaccel", init_camaccel;
-                "fsaccel", init_fsaccel
+                "fsaccel_raw", init_fsaccel, None;
+                "fsaccel", init_fsaccel, Some(mult);
                 );
         match last_output {
             Ok(o)   => return Ok(o),
@@ -773,11 +797,11 @@ type BackendResult = Result<OrientatorKind, BackendError>;
 
 #[cfg(feature = "fsaccel")]
 /// Initialize a filesystem accelerometer
-fn init_fsaccel(opts: &HashMap<String, String>) -> BackendResult {
-    match opts.get("mult") {
+fn init_fsaccel(opts: &mut HashMap<String, String>, mult: Option<f64>) -> BackendResult {
+    match mult {
         Some(m) => Ok(OrientatorKind::FsAccel(FilteredAccelerometer::new(
                     FsAccel::from_opts(opts).map_err(|e| BackendError::FsAccel(e))?,
-                    m.parse::<f64>().map_err(|e| BackendError::MultNotFloat("fsaccel", m.to_owned(), e))?
+                    m
                     ))),
         None    => Ok(OrientatorKind::FsAccelRaw(FsAccel::from_opts(opts).map_err(|e| BackendError::FsAccel(e))?)),
     }
@@ -790,8 +814,6 @@ enum BackendError {
     NotCompiled(&'static str),
     /// Backend does not exist
     NoSuchBackend(String),
-    /// Bad multiplier value for filtered accelerometer
-    MultNotFloat(&'static str, String, std::num::ParseFloatError),
     /// Couldn't find/open filesystem accelerometer files
     FsAccel(std::io::Error),
 }
@@ -804,7 +826,6 @@ enum BackendError {
  *             &NotCompiled(ref s) => s,
  *             &NoSuchBackend(ref s)   => &s[..],
  *             &FsAccel(_) => "fsaccel",
- *             &MultNotFloat(ref b,_,_) => b,
  *         }
  *     }
  * }
@@ -823,9 +844,6 @@ impl Display for BackendError {
             &FsAccel(ref e) => {
                 write!(fmt, "fsaccel init error: {}", e)
             },
-            &MultNotFloat(ref b, ref s, ref e)  => {
-                write!(fmt, "bad mult value ({}) on filtered {}: {}", s, b, e)
-            },
         }
     }
 }
@@ -841,7 +859,6 @@ impl std::error::Error for BackendError {
             &BackendError::NotCompiled(_)   => None,
             &BackendError::NoSuchBackend(_) => None,
             &BackendError::FsAccel(ref e) => Some(e),
-            &BackendError::MultNotFloat(_,_,ref e)  => Some(e),
         }
     }
 }
@@ -855,7 +872,16 @@ fn init_fsaccel(_opts: HashMap<String, String>) -> BackendResult {
 /// Get backend options from command line
 fn get_backend_options() -> (Vec<String>, HashMap<String, HashMap<String, String>>) {
     lazy_static! {
-        static ref BACKEND_RE: Regex = Regex::new(r"^(?P<backend>\w+)(?P<options>,(?:(?:[^;]*[^;\])?(?:\\\\)*\\;)*[^;]+)?").unwrap();
+        static ref BACKEND_RE: Regex = Regex::new(r"^(?x)
+        (?P<backend>\w+)
+        (?P<options>,
+            (?:
+                (?:[^;]*[^;\\])?
+                (?:\\\\)*
+                \\;
+            )*
+            [^;]+
+        )?").unwrap();
     }
     let mut backlist = Vec::new();
     let mut optmap = HashMap::new();
@@ -872,6 +898,9 @@ fn get_backend_options() -> (Vec<String>, HashMap<String, HashMap<String, String
     }
     for caps in BACKEND_RE.captures_iter(backends) {
         let backend = &caps["backend"];
+        if ! optmap.contains_key(backend) {
+            optmap.insert(backend.to_owned(), HashMap::new());
+        }
         backlist.push(backend.to_owned());
         parse_options(
             &caps.name("options").map(|m| m.as_str()).unwrap_or(""),
@@ -883,7 +912,19 @@ fn get_backend_options() -> (Vec<String>, HashMap<String, HashMap<String, String
 
 fn parse_options<'s>(optstr: &'s str, optmap: &mut HashMap<String, String>) {
     lazy_static! {
-        static ref OPT_RE: Regex = Regex::new(r"[,;](?P<name>\w+)=(?P<value>(?:(?:[^,;]*[^,;\])?(?:\\{2})*\\[,;])*[^,;]+)").unwrap();
+        static ref OPT_RE: Regex = Regex::new(r"(?x)
+        [,;]
+        (?P<name>\w+)=
+        (?P<value>
+            (?:
+                (?:
+                    [^,;]*
+                    [^,;\\]
+                )?
+                (?:\\{2})*
+                \\[,;]
+            )*
+        [^,;]+)").unwrap();
     }
     for caps in OPT_RE.captures_iter(optstr) {
         //TODO: Un-escape commas and semicolons
@@ -902,10 +943,7 @@ pub trait Orientator {
 impl<T: Accelerometer> Orientator for T {
     fn orientation(&mut self) -> Option<Rotation> {
         let acc = self.read();
-        if acc.z.abs() > 8.3385 { // 85% of g
-            trace!("rot: {}; accel: {}", "None (z too high)", acc);
-            None
-        } else if (acc.x.abs() - acc.y.abs()).abs() > acc.z.abs() / 2.0 + 1.4715 {
+        if (acc.x.abs() - acc.y.abs()).abs() > acc.z.abs() / *SENSITIVITY + 1.4715 {
             if acc.x.abs() > acc.y.abs() {
                 if acc.x < 0.0 {
                     trace!("rot: {}; accel: {}", Rotation::Right, acc);
@@ -1076,7 +1114,8 @@ fn parse_path(input: &str, isdir: bool) -> String {
                 # Repeat any number of times and there you go!
                 )*
             )
-        \}").unwrap();
+        \}
+        )").unwrap();
         static ref BRACE_RE: Regex = Regex::new(r"((?:%{2})*)%\}").unwrap();
     }
     PATH_RE.replace_all(input, |caps: &Captures| {
@@ -1135,10 +1174,30 @@ fn get_u32_arg_val(name: &str) -> Option<u32> {
     } else { None }
 }
 
+/// Get the f64 value of an argument to a command-line option.
+/// Returns `None` if parsing fails.
+fn get_f64_arg_val(name: &str) -> Option<f64> {
+    if let Some(s) = CLI_ARGS.value_of(name) {
+        s.parse::<f64>().map_err(|e|
+                                 warn!("Can't parse '{}' as a uint ({})!", s, e)
+                                )
+            .ok()
+    } else { None }
+}
+
 /// Check that an argument is a valid u32
 fn validate_u32(v: String) -> Result<(), String> {
     if "" == v { return Ok(()) };
     match v.parse::<u32>() {
+        Ok(_)   => Ok(()),
+        Err(e)  => Err(format!("Try using a positive integer, not {}. ({:?})",v,e)),
+    }
+}
+
+/// Check that an argument is a valid f64
+fn validate_f64(v: String) -> Result<(), String> {
+    if "" == v { return Ok(()) };
+    match v.parse::<f64>() {
         Ok(_)   => Ok(()),
         Err(e)  => Err(format!("Try using a positive integer, not {}. ({:?})",v,e)),
     }
