@@ -8,7 +8,7 @@ match the orientation.
 - [Rust](rust); more specifically, [Cargo](cargo) *(Cargo technically isn't 
   necessary as long as you have the Rust compiler, but it'll save you tons 
   of work)*
-  ### Running
+### Running
 - iio-sensor-proxy *(For the FSAccel backend, which is the only one 
   currently implemented)*
 
