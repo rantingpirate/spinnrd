@@ -203,8 +203,8 @@ fn fsbackendhelp() -> String {
     use accel::fsaccel::*;
     format!("
     For fsaccel:
-        path: The path to look for accelerometer files in. File globbing
-            is allowed [Defaults to autodetection]
+        path: The path to the accelerometer files.
+            [Autodetects if not set]
         scale: Use a set scale instead of reading the scale file.
         defscale: A default scale to use in case the scale file can't be found.
         scalefile: The name of the file to check for the scale.
