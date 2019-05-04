@@ -5,7 +5,7 @@ match the orientation.
 
 ## Requirements
 ### Building
-- [rust](Rust); more specifically, [cargo](Cargo) *(Cargo technically isn't 
+- [Rust](rust); more specifically, [Cargo](cargo) *(Cargo technically isn't 
   necessary as long as you have the Rust compiler, but it'll save you tons 
   of work)*
   ### Running
