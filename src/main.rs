@@ -194,20 +194,41 @@ Filenames accept a few variables that will be expanded as follows:
         details). Use '%}}' to embed a '}}' in the format string.
 
 BACKEND OPTIONS
-The available backend options are as follows:
-    For fsaccel:
-        data_prefix: The part of the channel data file name before the 
-            channel name. [Defaults to \"in_accel_\"]
-        descr_prefix: The part of the channel description file name before 
-            the channel name. [Defaults to \"scan_elements/in_accel_\"]
-        data_suffix: The part of the channel data file name after the 
-            channel name. [Defaults to \"_raw\"]
-        descr_suffix: The part of the channel description file name after 
-            the channel name. [Defaults to \"_type\"]
-        fix_sign: Whether to apply signfix (when signed integers are 
-            written as unsigned). [Defaults to false]
-",chrono_ver());
+The available backend options are as follows:{}{}\n
+",chrono_ver(),fsbackendhelp(),iiobackendhelp());
 }
+
+#[cfg(feature = "fsaccel")]
+fn fsbackendhelp() -> String {
+    use accel::fsaccel::*;
+    format!("
+    For fsaccel:
+        path: The path to look for accelerometer files in. File globbing
+            is allowed [Defaults to autodetection]
+        scale: Use a set scale instead of reading the scale file.
+        defscale: A default scale to use in case the scale file can't be found.
+        scalefile: The name of the file to check for the scale.
+            [Defaults to \"{}\"]
+        data_prefix: The part of the channel data file name before the 
+            channel name. [Defaults to \"{}\"]
+        descr_prefix: The part of the channel description file name before 
+            the channel name. [Defaults to \"{}\"]
+        data_suffix: The part of the channel data file name after the 
+            channel name. [Defaults to \"{}\"]
+        descr_suffix: The part of the channel description file name after 
+            the channel name. [Defaults to \"{}\"]
+        fix_sign: Whether to apply signfix (when signed integers are 
+            written as unsigned). [Defaults to {}]
+", DEFAULT_SCALE_FILE, DEFAULT_DATA_PREFIX,
+   DEFAULT_DESCR_PREFIX, DEFAULT_DATA_SUFFIX, DEFAULT_DESCR_SUFFIX,
+   DEFAULT_FIX_SIGN
+    )
+}
+#[cfg(not(feature = "fsaccel"))]
+fn fsbackendhelp() -> String { "".to_owned() }
+
+//#[cfg(not(feature = "iioaccel"))]
+fn iiobackendhelp() -> String { "".to_owned() }
 
 // the part where we define the command line arguments
 lazy_static!{

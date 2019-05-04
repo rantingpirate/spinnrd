@@ -18,14 +18,21 @@ use glob::*;
 
 type IoResult<T> = Result<T, IoError>;
 
-const DEFAULT_ENDIANNESS: Endian = Endian::Little;
-const DEFAULT_SIGNED: Signed = Signed::Unsigned;
+const DEFAULT_FSACCEL_ENDIANNESS: Endian = Endian::Little;
+const DEFAULT_FSACCEL_SIGNED: Signed = Signed::Unsigned;
 const DEFAULT_REPEAT: u8 = 0u8;
 const DEFAULT_RSHIFT: u8 = 1u8;
 
-static DEFAULT_SCALE_FILE: &'static str = "in_accel_scale";
-static DEFAULT_FSACCEL_PATH: &'static str = "/sys/bus/iio/devices/iio:device*";
 static SCANTYPE_RE_STR: &'static str = r"(?:(?P<end>be|le):)?(?P<sign>s|u)?(?P<bit>\d+)/(?P<sto>\d+)(?:X(?P<rep>\d+))?(?:>>(?P<shift>\d+))?";
+
+pub const DEFAULT_FSACCEL_PATH: &str = "/sys/bus/iio/devices/iio:device*";
+pub const DEFAULT_SCALE_FILE:   &str = "in_accel_scale";
+pub const DEFAULT_DATA_PREFIX:  &str = "in_accel_";
+pub const DEFAULT_DESCR_PREFIX: &str = "scan_elements/in_accel_";
+pub const DEFAULT_DATA_SUFFIX:  &str = "_raw";
+pub const DEFAULT_DESCR_SUFFIX: &str = "_type";
+pub const DEFAULT_FIX_SIGN:     &str = "false";
+
 
 #[derive(Debug)]
 pub enum Endian {
@@ -38,7 +45,7 @@ impl Endian {
         match s {
             "be"    => Endian::Big,
             "le"    => Endian::Little,
-            _       => DEFAULT_ENDIANNESS,
+            _       => DEFAULT_FSACCEL_ENDIANNESS,
         }
     }
 }
@@ -55,7 +62,7 @@ impl Signed {
         match s {
             "s"    => Signed::Signed,
             "u"    => Signed::Unsigned,
-            _       => DEFAULT_SIGNED,
+            _       => DEFAULT_FSACCEL_SIGNED,
         }
     }
 }
@@ -118,13 +125,13 @@ impl ScanType {
         let sbits = caps["sto"].parse::<u8>().unwrap();
         let sign = match caps.name("sign") {
             Some(s)   => Signed::from_str(s.as_str()),
-            _           => DEFAULT_SIGNED,
+            _           => DEFAULT_FSACCEL_SIGNED,
         };
 
         let rval = ScanType {
             endianness: match caps.name("end") {
             Some(s)   => Endian::from_str(s.as_str()),
-                _           => DEFAULT_ENDIANNESS,
+                _           => DEFAULT_FSACCEL_ENDIANNESS,
             },
             conversion: match (&fix_sign, &sign) {
                 (true, Signed::Signed) => match bits {
@@ -327,13 +334,13 @@ macro_rules! unmapvars {
 pub fn build_channels(chans: (&str, &str, &str), opts: &HashMap<String, String>) -> IoResult<(Channel, Channel, Channel)> {
     debug!("Building channels {:?}", &chans);
     unmapvars![opts:
-        data_prefix, "in_accel_";
+        data_prefix, DEFAULT_DATA_PREFIX;
         // normally would insist on Path.join, but this app is
         // *nix-exclusive anyway.
-        desc_prefix, "scan_elements/in_accel_";
-        data_suffix, "_raw";
-        desc_suffix, "_type";
-        fix_sign, "false";
+        descr_prefix, DEFAULT_DESCR_PREFIX;
+        data_suffix, DEFAULT_DATA_SUFFIX;
+        descr_suffix, DEFAULT_DESCR_SUFFIX;
+        fix_sign, DEFAULT_FIX_SIGN;
     ];
     let fs: bool = fix_sign.parse().expect("fix_sign must be 'true' or 'false'.");
     let path = PathBuf::from(opts.get("path").unwrap_or(&DEFAULT_FSACCEL_PATH.to_owned()));
@@ -346,7 +353,7 @@ pub fn build_channels(chans: (&str, &str, &str), opts: &HashMap<String, String>)
             Channel::new_from_file(
                 $chan,
                 path.join(format!("{}{}{}",data_prefix,$chan,data_suffix)),
-                path.join(format!("{}{}{}",desc_prefix,$chan,desc_suffix)),
+                path.join(format!("{}{}{}",descr_prefix,$chan,descr_suffix)),
                 fs
                 )?
         };

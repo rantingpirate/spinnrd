@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter};
 use std::fmt::Result as FmtResult;
 
 #[cfg(feature = "fsaccel")]
-mod fsaccel;
+pub mod fsaccel;
 pub use self::fsaccel::FsAccelerometer as FsAccel;
 
 
