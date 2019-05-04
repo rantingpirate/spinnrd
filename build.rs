@@ -1,4 +1,5 @@
 extern crate built;
+//TODO: Make spinnr.sh with version# and default spinfile from template
 fn main() {
     let mut bopt = built::Options::default();
     let out_dir = std::env::var("OUT_DIR").unwrap();
