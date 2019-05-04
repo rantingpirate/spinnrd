@@ -51,7 +51,7 @@ use std::fs::{File,remove_file,OpenOptions};
 // use std::os::unix::io::AsRawFd;
 use std::io::Write;
 use std::path::{PathBuf};
-// use std::io::Error as IoError;
+use std::io::Error as IoError;
 // use std::io::ErrorKind as IoErrorKind;
 // use std::io::SeekFrom;
 use std::fmt::{Display, Formatter};
@@ -115,16 +115,19 @@ const DEFAULT_SENSITIVITY: f64 = 5.0;
 const DEFAULT_SENSITIVITY_STR: &str = "5.0";
 
 /// The default pid file
-const DEFAULT_PID_FILE: &'static str = "/run/spinnrd.pid";
+const DEFAULT_PID_FILE: &'static str = "%d/spinnrd.pid";
 
 // /// The backup pid file
 // const BACKUP_PID_FILE: &'static str = "/tmp/spinnrd.pid";
 
 /// The default spinfile
-const DEFAULT_SPINFILE: &'static str = "spinnrd.spin";
+const DEFAULT_SPINFILE: &'static str = "%d/spinnrd.spin";
 
 /// The default working directory
 const DEFAULT_WORKING_DIRECTORY: &'static str = "/run/spinnrd";
+
+/// The backup working directory
+const BACKUP_WORKING_DIRECTORY: &str = "/tmp";
 
 /// The default backend options
 const DEFAULT_BACKEND_OPTS: &'static str = "";
@@ -139,10 +142,13 @@ const DEFAULT_LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
 const DEFAULT_LOG_LEVEL: log::LevelFilter = log::LevelFilter::Info;
 
 /// The default logfile
-const DEFAULT_LOG_FILE: &'static str = "syslog";
+const DEFAULT_LOG_FILE: &'static str = "/var/log/spinnrd.log";
+
+/// The backup logfile
+const BACKUP_LOG_FILE: &str = "%d/spinnrd.log";
 
 /// The file to (try) to write the logging fail message to
-const LOG_FAIL_FILE: &'static str = "/tmp/spinnr.%t.logfail";
+const LOG_FAIL_FILE: &'static str = "/tmp/spinnrd.%t.logfail";
 
 /// Whether to quit by default on spinfile write error
 const DEFAULT_QUIT_ON_SPIN_WRITE_ERR: bool = false;
@@ -165,29 +171,43 @@ const ERR_NO_ORIENTATOR: i32 = -1313;
 
 lazy_static!{
     static ref VERSION: String = format!("{} ({})", metadata::PKG_VERSION, metadata::FEATURES_STR);
-    static ref FMT_HELP_STR: String = format!("FILENAME FORMATTING
+    static ref AFTER_HELP_STR: String = format!("FILENAME FORMATTING
 Filenames accept a few variables that will be expanded as follows:
-    %e: The current epoch time (in seconds)
-    %E: The current UTC epoch time (in seconds.nanoseconds)
-    %_e:    The current epoch time (in milliseconds)
-    %_E:    The current epoch time (in seconds.milliseconds)
-	%d:  The spinnr directory
+    %d:  The spinnr working directory
+    %x:  $XDG_RUNTIME_DIR if it is set and valid Unicode; /tmp otherwise.
+    %e:  The current epoch time (in seconds)
+    %E:  The current UTC epoch time (in seconds.nanoseconds)
+    %_e: The current epoch time (in milliseconds)
+    %_E: The current epoch time (in seconds.milliseconds)
     %t:  The current local date and time, in basic ISO 8601 format to the 
-    nearest second (YYYYmmddTHHMMSS±hhmm)
-    %_t:  The current local date and time, in basic ISO 8601 format to the 
-    nearest nanosecond (YYYYmmddTHHMMSS.NN±hhmm)
+        nearest second (YYYYmmddTHHMMSS±hhmm)
+    %_t: The current local date and time, in basic ISO 8601 format to the 
+        nearest nanosecond (YYYYmmddTHHMMSS.NN±hhmm)
     %T:  The current UTC date and time, in basic ISO 8601 format to the 
-    nearest second (YYYYmmddTHHMMSS±hhmm)
-    %_T:  The current UTC date and time, in basic ISO 8601 format to the 
-    nearest nanosecond (YYYYmmddTHHMMSS.NN±hhmm)
+        nearest second (YYYYmmddTHHMMSS±hhmm)
+    %_T: The current UTC date and time, in basic ISO 8601 format to the 
+        nearest nanosecond (YYYYmmddTHHMMSS.NN±hhmm)
     %f{{<FORMAT>}} | %F{{<FORMAT}}:  The current (local | UTC) date and 
         time, formatted according to the custom format string FORMAT 
         (strftime-like, see 
         https://docs.rs/chrono/{}/chrono/format/strftime/index.html for 
         details). Use '%}}' to embed a '}}' in the format string.
+
+BACKEND OPTIONS
+The available backend options are as follows:
+    For fsaccel:
+        data_prefix: The part of the channel data file name before the 
+            channel name. [Defaults to \"in_accel_\"]
+        descr_prefix: The part of the channel description file name before 
+            the channel name. [Defaults to \"scan_elements/in_accel_\"]
+        data_suffix: The part of the channel data file name after the 
+            channel name. [Defaults to \"_raw\"]
+        descr_suffix: The part of the channel description file name after 
+            the channel name. [Defaults to \"_type\"]
+        fix_sign: Whether to apply signfix (when signed integers are 
+            written as unsigned). [Defaults to false]
 ",chrono_ver());
 }
-//FIXME: Document the freaking backend options!!!
 
 // the part where we define the command line arguments
 lazy_static!{
@@ -304,7 +324,8 @@ lazy_static!{
              .help("Set the verbosity of the logging.")
              .long_help("Values are listed in order of decreasing verbosity")
              )
-        .after_help((*FMT_HELP_STR).as_str())
+        //TODO: add --log-fmt
+        .after_help((*AFTER_HELP_STR).as_str())
         .get_matches();
 }
 
@@ -319,7 +340,20 @@ fn chrono_ver() -> &'static str {
 
 lazy_static! {
     static ref SENSITIVITY: f64 = get_f64_arg_val("sensitivity").unwrap_or(DEFAULT_SENSITIVITY);
+    static ref IS_QUIET: bool = CLI_ARGS.is_present("quiet");
 }
+
+macro_rules! qprintln {
+    ( $($args:tt)* ) => {
+        if ! *IS_QUIET { println!($($args)*); }
+    };
+}
+macro_rules! qprinterr {
+    ( $($args:tt)*) => {
+        if ! *IS_QUIET { eprintln!($($args)*); }
+    };
+}
+
 
 fn main() {
     // lets us exit with status - important for running under systemd, etc.
@@ -330,15 +364,11 @@ fn main() {
 fn mainprog() -> i32 {
     match init_logger() {
         Ok(l)   => {
-            if ! is_quiet() {
-                println!("Logging initialized to {}", l);
-            }
+            qprintln!("Logging initialized to {}", l);
             debug!("Logging initialized to {}", l);
         },
         Err(e)  => {
-            if ! is_quiet() {
-                eprintln!("{}", e);
-            }
+            qprinterr!("{}", e);
             log_logging_failure(e);
             return 2i32
         }
@@ -349,10 +379,10 @@ fn mainprog() -> i32 {
     if is_daemon() {
         info!("Attempting abyssal arachnid generation...");
         pidfile = Some(get_pid_file());
-        /*let daemon =*/ Daemonize::new()
+        let daemon = Daemonize::new()
             .pid_file(match &pidfile {Some(ref s) => s, None => panic!()})
             .chown_pid_file(true)
-            .working_directory(get_working_dir())
+            .working_directory((*WORKING_DIR).clone())
             .user(get_user())
             .group(get_group())
             .umask(0o023)
@@ -397,6 +427,10 @@ fn mainprog() -> i32 {
          *     },
          * } // match daemonize()
          */
+        match daemon.start() {
+            Ok(_)   => (),
+            Err(e)  => {qprinterr!("Failed to daemonize! {}", e);},
+        }
     } // if is_daemon()
 
 
@@ -457,7 +491,7 @@ fn runloop(mut orient: OrientatorKind, period: u32, delay: u32) -> i32 {
 
         orientation = orient.orientation();
         if orientation.is_some() {
-            debug!("Orientation is {}", orientation.unwrap());
+            trace!("Orientation is {}", orientation.unwrap());
             if last_change != orientation {
                 last_change = orientation;
                 last_change_time = Instant::now();
@@ -613,9 +647,7 @@ fn init_logger() -> LogInitResult {
     } else if "system" == logfile {
         // We'd log the failure but there's nothing to log to!
         init_sysd_journal(loglvl).or_else(|e| {
-            if ! is_quiet() {
-                eprintln!("Couldn't init systemd journaling ({}); trying *nix syslog instead.", e);
-            }
+            qprinterr!("Couldn't init systemd journaling ({}); trying *nix syslog instead.", e);
             init_splatnix_syslog(loglvl)
         })
     } else if "syslog" == logfile {
@@ -671,7 +703,17 @@ fn get_syslog_facility() -> syslog::Facility {
 
 /// Initialize a file as the logger
 fn init_logfile(loglvl: LevelFilter, logfile: &str) -> LogInitResult {
-    let logpath = PathBuf::from(logfile);
+    let mut logpath = PathBuf::from(parse_path(logfile, false));
+    // If we can't write to the chosen log file, use the backup
+    if let Some(p) = logpath.clone().parent() {
+        match std::fs::metadata(p) {
+            Ok(ref m) if ! m.permissions().readonly() => (),
+            _   => {
+                warn!("Can't create file in {}; logging to {}", p.to_string_lossy(), BACKUP_LOG_FILE);
+                logpath = PathBuf::from(parse_path(BACKUP_LOG_FILE, false));
+            },
+        }
+    }
     WriteLogger::init(loglvl,
                       simplelog::Config::default(),
                       open_log_file(&logpath)?)
@@ -695,20 +737,16 @@ fn open_log_file(logfile: &PathBuf) -> Result<File,LoggingError> {
 fn log_logging_failure<D: Display>(err: D) {
     // not using the filename formatting because it's unnecessary
     // and might cause its own problems.
-    let logfailfile = LOG_FAIL_FILE.replace(
-        "%d",
-        format!("{}", chrono::Local::now()
-                .format("%Y%m%dT%H%M%S%.f%z")).as_str());
-
+    let logfailfile = parse_path(LOG_FAIL_FILE, false);
     match File::create(&logfailfile) {
         Ok(mut file)    => {
             write!(file, "{}", err)
-                .unwrap_or_else(|e| eprintln!(
+                .unwrap_or_else(|e| qprinterr!(
                         "Couldn't log logging error '{}' to {}. ({})",
                         err, logfailfile, e));
         },
         Err(e)  => {
-            eprintln!("Couldn't open {} to log logging error '{}'. ({})", 
+            qprinterr!("Couldn't open {} to log logging error '{}'. ({})", 
                       logfailfile, err, e);
         }
     }
@@ -1007,17 +1045,11 @@ lazy_static! {
     static ref NOW_LOCAL: DateTime<Local> = Local::now();
 }
 
-/// Returns true if the "quiet" flag was passed on the command line
-// #[inline]
-fn is_quiet() -> bool {
-    CLI_ARGS.is_present("quiet")
-}
-
 /*
  * /// Returns true if we shouldn't write to stdout/stderr
  * // #[inline]
  * fn be_quiet() -> bool {
- *     is_quiet() || is_daemon()
+ *     *IS_QUIET || is_daemon()
  * }
  */
 
@@ -1091,30 +1123,33 @@ macro_rules! timef {
 fn parse_path(input: &str, isdir: bool) -> String {
     lazy_static! {
         static ref PATH_RE: Regex = Regex::new(r"(?x)
-        # The basic matches
-        %(_?[eEdtTuUgG%]
-        # A custom format string
-        | ([fF]) \{
-            # The format string
-            (
-                # Allow %} to print close brace
-                (?:
-                    # Any number of non-close-brace characters (lazy)
-                    [^\}]*?
-                    # An optional (printed) close brace
+        % (
+            # The underscore-able basic matches
+            _?[eEtT] |
+            # The other basic matches
+            [dx%] |
+            # A custom format string
+            ([fF]) \{
+                # The format string
+                (
+                    # Allow %} to print close brace
                     (?:
-                        # First, a non-'%' character
-                        [^%]
-                        # Any number of printed '%'s
-                        (?:%{2})*
-                        # Then '%}'
-                        %\}
-                    # Optionally
-                    )?
-                # Repeat any number of times and there you go!
-                )*
-            )
-        \}
+                        # Any number of non-close-brace characters (lazy)
+                        [^\}]*?
+                        # An optional (printed) close brace
+                        (?:
+                            # First, a non-'%' character
+                            [^%]
+                            # Any number of printed '%'s
+                            (?:%{2})*
+                            # Then '%}'
+                            %\}
+                        # Optionally
+                        )?
+                    # Repeat any number of times and there you go!
+                    )*
+                )
+            \}
         )").unwrap();
         static ref BRACE_RE: Regex = Regex::new(r"((?:%{2})*)%\}").unwrap();
     }
@@ -1127,12 +1162,14 @@ fn parse_path(input: &str, isdir: bool) -> String {
             "_E"  => timef!(NOW_UTC timestamp timestamp_subsec_millis),
             "d"  => {
                 if isdir {"%d".to_owned()}
-                else { get_working_dir().to_str().unwrap_or("BADDIR").to_owned() }
+                else { (*WORKING_DIR).to_string_lossy().into_owned() }
             },
             "t"  => timef!(NOW_LOCAL: STRF_8601_BASIC),
             "_t" => timef!(NOW_LOCAL: STRF_8601_BASIC_NS),
             "T"  => timef!(NOW_UTC: STRF_8601_BASIC),
             "_T" => timef!(NOW_UTC: STRF_8601_BASIC_NS),
+            "x"  => std::env::var("XDG_RUNTIME_DIR")
+                .unwrap_or_else(|_| "/tmp".to_owned()),
             x    => {
                 //not sure this'll work, but it conveys the gist
                 if caps.len() > 3 && 0 < (&caps[2]).len() {
@@ -1153,11 +1190,40 @@ fn get_path(name: &str, default: &str, isdir: bool) -> PathBuf {
     PathBuf::from(parse_path(CLI_ARGS.value_of(name).unwrap_or(default), isdir))
 }
 
+lazy_static! {
+    static ref WORKING_DIR: PathBuf = get_working_dir().unwrap();
+}
+
 /// Get the working directory (where files go by default)
 #[inline]
-fn get_working_dir() -> PathBuf {
+fn get_working_dir() -> Result<PathBuf, IoError> {
     //TODO: Do I want to make sure it ends in a slash? Probably not...
-    get_path("workingdir", DEFAULT_WORKING_DIRECTORY, true)
+    let wdir = get_path("workingdir", DEFAULT_WORKING_DIRECTORY, true);
+    qprinterr!("using wdir {}", wdir.to_string_lossy());
+    if ! (&wdir).is_dir() {
+        qprinterr!("{} doesn't exist; creating...", wdir.to_string_lossy());
+        match std::fs::create_dir_all(&wdir) {
+            Ok(_)   => Ok(wdir),
+            Err(e)  => {
+                let backpath = PathBuf::from(parse_path(BACKUP_WORKING_DIRECTORY, true));
+                qprinterr!(
+                    "Couldn't create {} ({}); using {} instead.",
+                    wdir.to_string_lossy(),
+                    e,
+                    backpath.to_string_lossy(),
+                );
+                if ! (&backpath).is_dir() {
+                    qprinterr!("{} doesn't exist either; creating...",
+                               backpath.to_string_lossy());
+                    std::fs::create_dir_all(&backpath).map(|_| backpath)
+                } else {
+                    Ok(backpath)
+                }
+            },
+        }
+    } else {
+        Ok(wdir)
+    }
 }
 
 /// Get the list of orientators to try
@@ -1222,9 +1288,7 @@ fn rm_pid_file(p: &PathBuf) {
     match remove_file(p) {
         Ok(_)   => {},
         Err(e)  => {
-            if ! is_quiet() {
-                error!("Error removing PID file '{}': {}", p.display(), e);
-            }
+            error!("Error removing PID file '{}': {}", p.display(), e);
             // return 7i32;
         },
     }

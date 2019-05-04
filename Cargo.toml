@@ -1,4 +1,5 @@
 [package]
+#FIXME: add more metadata?
 name = "spinnrd"
 version = "1.0.0"
 authors = ["James Wescott <james@wescottdesign.com>"]

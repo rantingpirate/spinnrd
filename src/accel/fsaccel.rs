@@ -333,9 +333,9 @@ pub fn build_channels(chans: (&str, &str, &str), opts: &HashMap<String, String>)
         desc_prefix, "scan_elements/in_accel_";
         data_suffix, "_raw";
         desc_suffix, "_type";
-        fix_scale, "false";
+        fix_sign, "false";
     ];
-    let fs: bool = fix_scale.parse().expect("fix_scale must be 'true' or 'false'.");
+    let fs: bool = fix_sign.parse().expect("fix_sign must be 'true' or 'false'.");
     let path = PathBuf::from(opts.get("path").unwrap_or(&DEFAULT_FSACCEL_PATH.to_owned()));
     debug!("fs = {}", fs);
     macro_rules! newchan {
