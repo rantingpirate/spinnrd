@@ -3,7 +3,7 @@
 function usage {
 	cat - <<EOF
 This is spinnr.sh, the client daemon of the linux screen autorotation daemons.
-Usage: $0 spinfile [-o output | -t touchscreen]...
+Usage: $0 spinfile [OUTPUT] [-o OUTPUT | -t TOUCHSCREEN]...
 
     -h, --help      Display this help and exit.
     -t TOUCHSCREEN,
@@ -69,6 +69,9 @@ elif ! [[ -f "$spinfile" ]]; then
 	exit 2
 fi
 
+if [[ "$2" ]]; then
+	outputs+=( "$2" )
+fi
 if ! (( ${#outputs} )); then
 	outputs=( $(xrandr -q | grep -Pom1 '\w+(?= connected)') )
 	echo "Using autodetected output $outputs"
