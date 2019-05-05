@@ -32,4 +32,5 @@ fi
 #TODO: additional xrandr args(?) (e.g. quiet)
 while inotifywait -qqe close_write "$spinfile"; do
   xrandr --output "$output" --rotate $(cat "$spinfile");
+  #FIXME: rotate touchscreen sensing to match!
 done
