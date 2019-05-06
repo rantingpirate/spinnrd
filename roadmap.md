@@ -27,10 +27,12 @@ priority/fun/coolness.
 	to add a new backend (as simple as adding a line to a macro 
 invocation?).
 - [ ] MOAR DOCUMENTATION! (comments EVERYWHERE).
+- [ ] Systemd service file
 
 # Long-term
 - [ ] Add iio backend
 - [ ] Read options from config file
+- [ ] Other service files?
 
 ## Packaging
 Because for this to achieve its full potential, it needs to be mostly (or 
