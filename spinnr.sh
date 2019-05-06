@@ -28,7 +28,7 @@ if ! [[ "$output" ]]; then
 fi
 
 #TODO: proper option parsing
-#TODO: interactive output choice
+#FEEP: interactive output choice
 #TODO: additional xrandr args(?) (e.g. quiet)
 while inotifywait -qqe close_write "$spinfile"; do
   xrandr --output "$output" --rotate $(cat "$spinfile");
