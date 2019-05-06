@@ -15,8 +15,8 @@ priority/fun/coolness.
 - [ ] TODO: Log before aborting due to bad scale.
 
 ## `spinnr.sh`
-- [ ] FIXME: Rotate touchscreen to match display!
-- [ ] TODO: Proper option parsing.
+- [x] FIXME: Rotate touchscreen to match display!
+- [x] TODO: Proper option parsing.
 - [ ] TODO: Add logging.
 - [ ] TODO: Autogenerate with `build.rs` to add default spinfile, etc.
 - [ ] TODO: Additional (xrandr?) args (e.g. `--quiet`).
