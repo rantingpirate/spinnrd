@@ -254,18 +254,6 @@ impl Channel {
         })
     }
 
-    /*
-     * /// Create a new Channel from files, assuming the default 
-     * /// (iio-sensor-proxy) naming scheme.
-     * pub fn from_name<P: AsRef<Path>>(id: &str, path: P, fix_sign: bool) -> IoResult<Channel> {
-     *     Ok(Channel {
-     *         id: id.to_owned(),
-     *         reader: BufReader::new(File::open(path.as_ref().join(format!("in_accel_{}_raw", id)))?),
-     *         scan: ScanType::from_file(path.as_ref().join("scan_elements").join(format!("in_accel_{}_type", id)), fix_sign)?,
-     *     })
-     * }
-     */
-
     /// Read the current value of the channel
     pub fn read(&mut self) -> i64 {
         let mut astr = String::new();
@@ -281,36 +269,9 @@ macro_rules! f2s {
     ( $f:expr, $s:ident ) => {
         {
             File::open($f)?.read_to_string(&mut $s)?;
-            /*
-             * match File::open($f) {
-             *     Ok(mut v)   => match v.read_to_string(&mut $s) {
-             *         Ok(v)   => v,
-             *         Err(_)  => return None,
-             *     },
-             *     Err(_)  => return None,
-             * }
-             */
         }
     };
 }
-
-/*
- * macro_rules! newchannels {
- *     ( $path:ident, $fs:ident, $($id:expr),+ ) => {
- *         {
- *             ($(
- *                     Channel::from_name($id, &$path, $fs)?
- *             /*
- *              *     match Channel::from_name($id, &$path) {
- *              *     Ok(c)   => {c},
- *              *     Err(_)  => {return None},
- *              * }
- *              */
- *             ),+)
- *         }
- *     };
- * }
- */
 
 macro_rules! unmapvars {
     [ $opts:ident: $($vars:tt)+ ] => {
@@ -402,29 +363,6 @@ impl FsAccelerometer {
             channels: build_channels(("x","y","z"), opts)?,
         })
     }
-
-
-    /*
-     * /// Creates a new FsAccelerometer for the IIO device at the specified 
-     * /// path.  Should look something like 
-     * /// `/sys/bus/iio/devices/iio:device#` (when using iio-sensor-proxy).
-     * pub fn from_path<P: AsRef<Path>>(path: P, fix_sign: bool) -> IoResult<FsAccelerometer> {
-     *     let mut scale = String::new();
-     *     { f2s!(path.as_ref().join(DEFAULT_SCALE_FILE), scale); }
-     *     Ok(FsAccelerometer {
-     *         scale: scale.trim().parse::<f64>().unwrap(),
-     *         channels: (newchannels!(path, fix_sign, "x", "y", "z")),
-     *     })
-     * }
-     */
-
-    /*
-     * /// Attempts to find an IIO accelerometer (assuming iio-sensor-proxy) 
-     * /// and make an FsAccelerometer for it.
-     * pub fn default(fix_sign: bool) -> IoResult<FsAccelerometer> {
-     *      FsAccelerometer::from_path(guess_path(DEFAULT_FSACCEL_PATH)?, fix_sign)
-     * }
-     */
 }
 
 impl super::Accelerometer for FsAccelerometer {

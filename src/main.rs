@@ -408,46 +408,7 @@ fn mainprog() -> i32 {
             .group(get_group())
             .umask(0o023)
             ;
-        //FEEP: Use socket to communicate (maybe). Or pipe file?
 
-        /*
-         * match daemonize() {
-         *     Daemonized::Error(e)    => {
-         *         //log error
-         *         match e {
-         *             DaemonizationError::PidFileLock(ref _r, ref _f, ref p)  => {
-         *                 rm_pid_file(p);
-         *                 warn!("{}. Deleted.",e);
-         *             },
-         *             DaemonizationError::PidFileWrite(ref _r, ref p) => {
-         *                 rm_pid_file(p);
-         *                 error!("{}. Deleted; aborting.",e);
-         *                 return 1i32;
-         *             }
-         *             _   => {
-         *                 error!("{}. Aborting.",e);
-         *                 return 1i32;
-         *             }
-         *         } // match e
-         *     }, // Daemonized::Error(e) =>
-         *     Daemonized::Parent(p)   => {
-         *         info!("Child forked with PID {}. Exiting...", p);
-         *         return 0;
-         *     },
-         *     Daemonized::Child(f)    => match f {
-         *         Some((f,p)) => {
-         *             info!("Successfully daemonized with PID-file '{}'", p.display());
-         *             _pid_file   = Some(f);
-         *             pid_fpath   = Some(p);
-         *         },
-         *         None    => {
-         *             _pid_file   = None;
-         *             pid_fpath   = None;
-         *             info!("Successfully daemonized with no PID-file");
-         *         },
-         *     },
-         * } // match daemonize()
-         */
         match daemon.start() {
             Ok(_)   => (),
             Err(e)  => {qprinterr!("Failed to daemonize! {}", e);},
@@ -655,7 +616,6 @@ type LogInitResult = Result<LogLocation, LoggingError>;
 
 /// Globally initialize the logger.
 fn init_logger() -> LogInitResult {
-    //FEEP: add filename parsing (e.g. `date`-style string)
     let logfile = CLI_ARGS.value_of("logfile").unwrap_or(DEFAULT_LOG_FILE);
 
     let loglvl = match CLI_ARGS.value_of("loglvl") {
@@ -986,7 +946,7 @@ fn parse_options<'s>(optstr: &'s str, optmap: &mut HashMap<String, String>) {
         [^,;]+)").unwrap();
     }
     for caps in OPT_RE.captures_iter(optstr) {
-        //TODO: Un-escape commas and semicolons
+        //FIXME: Un-escape commas and semicolons
         optmap.insert((&caps["name"]).to_owned(), (&caps["value"]).to_owned());
 
     }
@@ -1218,7 +1178,6 @@ lazy_static! {
 /// Get the working directory (where files go by default)
 #[inline]
 fn get_working_dir() -> Result<PathBuf, IoError> {
-    //TODO: Do I want to make sure it ends in a slash? Probably not...
     let wdir = get_path("workingdir", DEFAULT_WORKING_DIRECTORY, true);
     qprinterr!("using wdir {}", wdir.to_string_lossy());
     if ! (&wdir).is_dir() {

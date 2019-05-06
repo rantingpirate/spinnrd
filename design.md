@@ -5,6 +5,17 @@ For the purposes of this document, I will be using "orientation" to refer
 to the physical orientation of the device or representation of such, and 
 "rotation" to refer to the orientation of the screen.
 
+For those who don't know it, **feep** is a neologism for feature creep 
+("creeping feature" -> "feeping creature" -> "feep"). I use it to describe 
+cool ideas that are absolutely not part of the core functionality.
+
+<!---
+  ### A note about this document
+  Technically, this is intended to store my design decisions. Because of the 
+  way I work, it has a tendancy to also end up as a memo pad for me to jot 
+  notes for later. I try to remove those when I'm done
+--->
+
 ---
 
 # Language
@@ -46,53 +57,6 @@ A statically-typed, compiled language without having to worry about
 managing memory or inheritance? Sign me up please!
 
 
-# This Project
-So why write this? Surely there's already software to do this, right?  
-Well, actually...
-
-At the time I started this, I was using a Lenovo Flex 3 14" - essentially 
-the consumer version of the enterprise Yoga. It can be used in Laptop, 
-Stand, Easel, or Tablet configuration. The last two, however, need the 
-display to be able to auto-rotate for maximum usability. So I looked.
-
-And I looked.
-
-I found a few things, but none that worked consistently well, if at all.  
-And the one that worked was a GUI userspace application and didn't work for 
-the login manager (not, now that I think about it, that I really tried...). 
-So, I decided to write my own.
-
-What you see here is the product of many man-days of effort, all to solve 
-one niggly little problem: **Why can't my screen just rotate itself like it 
-does for Windows, macOS, iOS, and Android?** It isn't 'done' and it may 
-never be - there'll probably always be something I want to add - but the 
-core functionality? It's there.  It works. And so I present to you... 
-spinnrd.
-
-
-# Why spinnrd?
-This actually isn't the first iteration of the whole "use Rust to rotate 
-the screen to match the orientation".  That first version was called 
-'spinnr', and it worked. So why rewrite it?
-
-spinnr was written as one executable, entirely in Rust, with bindings to 
-xrandr. And that was cool and all, but then I saw the problem. Since it 
-bound to xrandr, it couldn't start without X.  Which means you'd be running 
-a seperate instance for each session.  Not only does that mean much 
-duplication of work, but even if I'd gotten the iio backend working, I'm 
-pretty sure it wouldn't have worked in that case at all. So I rewrote it.
-
-Now there's two parts:
--	*spinnrd* is the parts of spinnr that dealt with translating 
-	accelerometer readings into physical orientations. It's written 
-entirely in Rust and there should be at most one instance per physical 
-screen.
--	*spinnr.sh* is the (example) 'spinnr client', that watches for 
-	orientation changes and rotates the screen to match.  It can have as 
-many as one instance per physical screen per X server (I'm hoping to reduce 
-this number in the future).
-
-
 # Communication
 The (first) big challenge I ran into was "how do I communicate the 
 orientation to several consumers?" Specifically, how do I make the 
@@ -119,7 +83,7 @@ changing.
 
 ## Events
 My second thought was "Wait, couldn't I implement this as events?" 
-I quickly reached the conclusion that events are for drivers, Clu.
+I quickly concluded that *"Events are for drivers, Clu."*
 
 
 ## Dbus
@@ -139,7 +103,7 @@ connect to a single socket, it'd be more accurate to say that multiple
 consumers can use the same socket to establish 1-1 connections with the 
 provider, which has to listen for those connections, establish them, and 
 write to each of them individually after checking that they're still open 
-(see previous comment about this being spinnrd).
+(see previous comment about this not being spinnrsrv).
 
 That, and Rust doesn't have any mature UDS libraries. [Dec. 2018]
 
@@ -186,6 +150,7 @@ for Linux. Or points me towards one I missed.
 `%_T`: The current UTC date and time, in basic ISO 8601 format with 
 	nanoseconds (YYYYmmddTHHMMSS.NN±hhmm)
 `%%`: A literal '%'
+`%}`: A literal '}' *(Doesn't end FSTR)*
 
 ## Later
 These require some use of libc
@@ -230,13 +195,13 @@ Orientator (filtered or not), but it'd be a lot less work to just use
 a ~~HashMap~~ ~~struct~~ HashMap.
 
 ### Universal options
--	hysteresis
+-	~~hysteresis~~ *Moved to being a normal command line option.*
 
 ### FSAccel options
 -	location of accelerometer files
 -	file prefixes
 -	file suffixes
--	x,y,z,scale filenames
+-	x,y,z,scale filenames *x,y,z filenames as yet unimplemented*
 -	default scale
 -	override scale
 -	fix int-as-uint
@@ -250,10 +215,11 @@ One of:
 Going with `backend[[,option=value]...][;backend[[,option=value]...]]`.
 
 # Building accelerometers
-Could use a builder struct, but would be overly much work for something 
-that's getting built once. Maybe if this were a library... but it's not.
+I could have used a builder struct, but would be overly much work for 
+something that's only getting built once. Maybe if this were a library...  
+but it's not.
 
 # Passing backends
-I've cracked it! Use an enum, with typedef'd values, with the typedefs 
-`cfg`-gated. Have a `DummyOrientator` struct, implementing the `Orientator` 
-trait (just returns `Normal` orientation).
+I've cracked it! Use an enum, with typedef'd ~~values~~ types, with the 
+typedefs `cfg`-gated. Have a `DummyOrientator` struct, implementing the 
+`Orientator` trait (just returns None).
