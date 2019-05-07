@@ -4,13 +4,13 @@ name = "spinnrd"
 version = "1.0.0"
 authors = ["James Wescott <james@wescottdesign.com>"]
 
-[package]
-include = [
-	"src/*.rs",
-	"build.rs",
-	"spinnr.sh",
-	"design.md",
-]
+# [package]
+# include = [
+# 	"src/*.rs",
+# 	"build.rs",
+# 	"spinnr.sh",
+# 	"design.md",
+# ]
 
 [features]
 sysd = ["systemd"]
