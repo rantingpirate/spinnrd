@@ -2,6 +2,8 @@
 //!
 //! Traits and structs for representing accelerometers.
 
+use super::{Rotation,Orientator,SENSITIVITY};
+
 use std::ops::{Add,Div,Sub,Mul,AddAssign};
 use std::fmt::{Display, Formatter};
 use std::fmt::Result as FmtResult;
@@ -96,6 +98,35 @@ pub trait Accelerometer {
     /// Returns the scale between raw integers and m/s^2.
     fn get_scale(&self) -> f64;
 }
+
+impl<T: Accelerometer> Orientator for T {
+    fn orientation(&mut self) -> Option<Rotation> {
+        let acc = self.read();
+        if (acc.x.abs() - acc.y.abs()).abs() > acc.z.abs() / *SENSITIVITY + 1.4715 {
+            if acc.x.abs() > acc.y.abs() {
+                if acc.x < 0.0 {
+                    trace!("rot: {}; accel: {}", Rotation::Right, acc);
+                    Some(Rotation::Right)
+                } else {
+                    trace!("rot: {}; accel: {}", Rotation::Left, acc);
+                    Some(Rotation::Left)
+                }
+            } else {
+                if acc.y < 0.0 {
+                    trace!("rot: {}; accel: {}", Rotation::Normal, acc);
+                    Some(Rotation::Normal)
+                } else {
+                    trace!("rot: {}; accel: {}", Rotation::Inverted, acc);
+                    Some(Rotation::Inverted)
+                }
+            }
+        } else {
+            trace!("rot: {}; accel: {}", "None (dxy too low)", acc);
+            None
+        }
+    }
+}
+
 
 /// Trait for accelerometer with low-pass filtering
 #[derive(Default, Debug, Clone, Copy)]

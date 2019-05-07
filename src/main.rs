@@ -22,6 +22,22 @@ extern crate systemd;
 #[cfg(feature = "fsaccel")]
 extern crate glob;
 
+
+macro_rules! qprintln {
+    ( $($args:tt)* ) => {
+        if ! *IS_QUIET { println!($($args)*); }
+    };
+}
+macro_rules! qprinterr {
+    ( $($args:tt)*) => {
+        if ! *IS_QUIET { eprintln!($($args)*); }
+    };
+}
+
+
+mod logging;
+mod backend;
+#[cfg(any(feature = "fsaccel", feature = "iioaccel"))]
 mod accel;
 #[allow(dead_code)]
 mod metadata {
@@ -29,17 +45,8 @@ mod metadata {
 }
 
 
-use accel::{Accelerometer, FilteredAccelerometer};
-#[cfg(feature = "fsaccel")]
-use accel::FsAccel;
-#[cfg(feature = "fsaccel")]
-type FsAccelT = FsAccel;
-#[cfg(feature = "fsaccel")]
-type FilteredFsAccelT = FilteredAccelerometer<FsAccel>;
-#[cfg(not(feature = "fsaccel"))]
-type FsAccelT = DummyOrientator;
-#[cfg(not(feature = "fsaccel"))]
-type FilteredFsAccelT = DummyOrientator;
+use backend::*;
+use logging::*;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -69,8 +76,6 @@ use chrono::{DateTime, Utc, Local};
 use chrono::TimeZone;
 // use errno::{errno,Errno};
 use regex::{Regex,Captures};
-use log::{LevelFilter,SetLoggerError};
-use simplelog::WriteLogger;
 // use libc::{uid_t,gid_t,getuid,getgid};
 use libc::{geteuid,getegid};
 // use libc::{getpwuid_r,getgrgid_r};
@@ -78,9 +83,6 @@ use libc::{geteuid,getegid};
 // use libc::passwd as CPasswd;
 // use libc::{pid_t, fork, setsid, chdir, close};
 // use libc::{getpid, fcntl, flock, F_SETLK, SEEK_SET};
-
-#[cfg(feature = "sysd")]
-use systemd::journal::JournalLog;
 
 // pub const F_RDLCK: ::libc::c_short = 1;
 
@@ -194,41 +196,9 @@ Filenames accept a few variables that will be expanded as follows:
         details). Use '%}}' to embed a '}}' in the format string.
 
 BACKEND OPTIONS
-The available backend options are as follows:{}{}\n
-",chrono_ver(),fsbackendhelp(),iiobackendhelp());
+The available backend options are as follows:{}\n
+",chrono_ver(),backend_help());
 }
-
-#[cfg(feature = "fsaccel")]
-fn fsbackendhelp() -> String {
-    use accel::fsaccel::*;
-    format!("
-    For fsaccel:
-        path: The path to the accelerometer files.
-            [Autodetects if not set]
-        scale: Use a set scale instead of reading the scale file.
-        defscale: A default scale to use in case the scale file can't be found.
-        scalefile: The name of the file to check for the scale.
-            [Defaults to \"{}\"]
-        data_prefix: The part of the channel data file name before the 
-            channel name. [Defaults to \"{}\"]
-        descr_prefix: The part of the channel description file name before 
-            the channel name. [Defaults to \"{}\"]
-        data_suffix: The part of the channel data file name after the 
-            channel name. [Defaults to \"{}\"]
-        descr_suffix: The part of the channel description file name after 
-            the channel name. [Defaults to \"{}\"]
-        fix_sign: Whether to apply signfix (when signed integers are 
-            written as unsigned). [Defaults to {}]
-", DEFAULT_SCALE_FILE, DEFAULT_DATA_PREFIX,
-   DEFAULT_DESCR_PREFIX, DEFAULT_DATA_SUFFIX, DEFAULT_DESCR_SUFFIX,
-   DEFAULT_FIX_SIGN
-    )
-}
-#[cfg(not(feature = "fsaccel"))]
-fn fsbackendhelp() -> String { "".to_owned() }
-
-//#[cfg(not(feature = "iioaccel"))]
-fn iiobackendhelp() -> String { "".to_owned() }
 
 // the part where we define the command line arguments
 lazy_static!{
@@ -267,17 +237,6 @@ lazy_static!{
              .value_name("SENSITIVITY")
              .default_value(DEFAULT_SENSITIVITY_STR)
              )
-        /*
-         * .arg(Arg::with_name("wait")
-         *      .short("w")
-         *      .long("wait")
-         *      .value_name("TIME")
-         *      // .default_value(DEFAULT_WAIT_SECONDS)
-         *      .validator(validate_u32)
-         *      .help("Wait TIME seconds before starting")
-         *      .empty_values(true)
-         *     )
-         */
         .arg(Arg::with_name("pidfile")
              .long("pid-file")
              .number_of_values(1)
@@ -362,17 +321,6 @@ fn chrono_ver() -> &'static str {
 lazy_static! {
     static ref SENSITIVITY: f64 = get_f64_arg_val("sensitivity").unwrap_or(DEFAULT_SENSITIVITY);
     static ref IS_QUIET: bool = CLI_ARGS.is_present("quiet");
-}
-
-macro_rules! qprintln {
-    ( $($args:tt)* ) => {
-        if ! *IS_QUIET { println!($($args)*); }
-    };
-}
-macro_rules! qprinterr {
-    ( $($args:tt)*) => {
-        if ! *IS_QUIET { eprintln!($($args)*); }
-    };
 }
 
 
@@ -517,222 +465,6 @@ fn runloop(mut orient: OrientatorKind, period: u32, delay: u32) -> i32 {
 }
 
 
-/// The type returned by init_logger upon failure to initialize a logger.
-// #[allow(missing_copy_implementations)]
-#[derive(Debug)]
-enum LoggingError {
-    /// Error parsing the log level
-    LogLevel(log::ParseLevelError, String),
-    /// Error opening (or writing to?) the log file
-    LogFile(std::io::Error, PathBuf),
-    /// Error initializing the journald connection
-    #[allow(dead_code)] // not always compiled
-    SystemdDup(SetLoggerError),
-    /// Can't initialize journald without systemd functionality
-    NoSystemd,
-    /// Error initializing the syslog connection
-    Syslog(syslog::Error),
-    /// Tried to initialize a file logger when another was already initialized
-    FileDup(SetLoggerError),
-}
-
-impl Display for LoggingError {
-    fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
-        use LoggingError::*;
-        match self {
-            &LogLevel(ref e, ref s)  => {
-                write!(fmt, "couldn't parse log level '{}': {}", e, s)
-            },
-            &LogFile(ref e, ref p)   => {
-                write!(fmt, "couldn't open log file '{}': {}'", e, p.to_str().unwrap_or(""))
-            },
-            &NoSystemd  => {
-                write!(fmt, "couldn't initialize systemd logging: systemd logging not built in")
-            },
-            &SystemdDup(ref e)  => {
-                write!(fmt, "couldn't initialize journald logging: {}", e)
-            },
-            &Syslog(ref e)  => {
-                write!(fmt, "couldn't initialize syslog logging: {}", e)
-            }
-            &FileDup(ref e) => {
-                write!(fmt, "can't initialize multiple loggers: {}", e)
-            }
-        }
-    }
-}
-
-// #[cfg(feature = "std")] // I don't think I need this...?
-impl std::error::Error for LoggingError {
-    fn description(&self) -> &str {
-        /*
-         * match self {
-         *     &LogLevel(_,s)  => format!("couldn't parse log level '{}'", s),
-         *     &LogFile(_,p)   => format!("couldn't use log file '{}'", p),
-         *     &SystemdDup(_) => "couldn't initialize journald logging",
-         *     &Syslog(_)  => "couldn't initialize syslog logging",
-         * }
-         */
-        "couldn't initialize logging"
-    }
-
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        use LoggingError::*;
-        match self {
-            &LogLevel(ref e,_)  => Some(e),
-            &LogFile(ref e,_)   => Some(e),
-            &NoSystemd  => None,
-            &SystemdDup(ref e)  => Some(e),
-            &Syslog(ref e)  => Some(e),
-            &FileDup(ref e) => Some(e),
-        }
-    }
-}
-
-/// Where we're logging to
-#[derive(Debug, PartialEq)]
-enum LogLocation {
-    /// Logging to a file
-    File(PathBuf),
-    /// Logging to systemd journald
-    #[allow(dead_code)] // not always compiled
-    Systemd,
-    /// Logging to kernel/syslog
-    Syslog,
-}
-
-impl Display for LogLocation {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        use LogLocation::*;
-        match self {
-            &File(ref p)    => write!(f, "{}", p.to_str().unwrap_or("")),
-            &Systemd    => write!(f, "systemd journal"),
-            &Syslog => write!(f, "syslog"),
-        }
-    }
-}
-
-type LogInitResult = Result<LogLocation, LoggingError>;
-
-/// Globally initialize the logger.
-fn init_logger() -> LogInitResult {
-    let logfile = CLI_ARGS.value_of("logfile").unwrap_or(DEFAULT_LOG_FILE);
-
-    let loglvl = match CLI_ARGS.value_of("loglvl") {
-        Some(s) => s.parse().map_err(|e| LoggingError::LogLevel(e,s.to_owned()))?,
-        None    => DEFAULT_LOG_LEVEL,
-    };
-
-    if "sysd" == logfile {
-        init_sysd_journal(loglvl)
-    } else if "system" == logfile {
-        // We'd log the failure but there's nothing to log to!
-        init_sysd_journal(loglvl).or_else(|e| {
-            qprinterr!("Couldn't init systemd journaling ({}); trying *nix syslog instead.", e);
-            init_splatnix_syslog(loglvl)
-        })
-    } else if "syslog" == logfile {
-        init_splatnix_syslog(loglvl)
-    } else {
-        init_logfile(loglvl, logfile)
-    }
-}
-
-/// Use the systemd journal as the logger
-#[cfg(feature = "sysd")]
-fn init_sysd_journal(level: LevelFilter) -> LogInitResult {
-    // JournalLog::init()
-    //     .map_err(|e| LoggingError::SystemdDup(e))
-    //     .and_then(|_| log::set_max_level(loglvl); Ok(_))
-    match systemd::JournalLog::init() {
-        Ok(_)   => {
-            log::set_max_level(level);
-            Ok(LogLocation::Systemd)
-        },
-        Err(e)  => LoggingError::SystemdDup(e),
-    }
-}
-
-/// Systemd support not compiled in - can't use it!
-#[cfg(not(feature = "sysd"))]
-fn init_sysd_journal(_level: LevelFilter) -> LogInitResult {
-    Err(LoggingError::NoSystemd)
-}
-
-// as per
-// https://rust-lang-nursery.github.io/rust-cookbook/development_tools/debugging/log.html#log-to-the-unix-syslog
-/// Use the system log as the logger
-fn init_splatnix_syslog(level: LevelFilter) -> LogInitResult {
-    syslog::init(
-        get_syslog_facility(),
-        level, 
-        Some("spinnrd")
-        )
-        .map_err(|e| LoggingError::Syslog(e))
-        .map(|_| LogLocation::Syslog)
-}
-
-/// Get the appropriate syslog facility
-/// (DAEMON if daemonizing, USER otherwise)
-fn get_syslog_facility() -> syslog::Facility {
-    if is_daemon() {
-        syslog::Facility::LOG_DAEMON
-    } else {
-        syslog::Facility::LOG_USER
-    }
-}
-
-/// Initialize a file as the logger
-fn init_logfile(loglvl: LevelFilter, logfile: &str) -> LogInitResult {
-    let mut logpath = PathBuf::from(parse_path(logfile, false));
-    // If we can't write to the chosen log file, use the backup
-    if let Some(p) = logpath.clone().parent() {
-        match std::fs::metadata(p) {
-            Ok(ref m) if ! m.permissions().readonly() => (),
-            _   => {
-                warn!("Can't create file in {}; logging to {}", p.to_string_lossy(), BACKUP_LOG_FILE);
-                logpath = PathBuf::from(parse_path(BACKUP_LOG_FILE, false));
-            },
-        }
-    }
-    WriteLogger::init(loglvl,
-                      simplelog::Config::default(),
-                      open_log_file(&logpath)?)
-        .map_err(|e| LoggingError::FileDup(e))
-        .map(|_| LogLocation::File(logpath))
-}
-
-/// Open the log file
-// this would be generic but it's complaining about expecting a type
-// parameter and getting a std::fs::File
-// fn open_log_file<W: Write + Send + 'static>(logfile: &PathBuf) -> Result<W,LoggingError> {
-fn open_log_file(logfile: &PathBuf) -> Result<File,LoggingError> {
-    OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(logfile)
-        .map_err(|e| LoggingError::LogFile(e, logfile.to_owned()))
-}
-
-/// Log the failure to open a logfile
-fn log_logging_failure<D: Display>(err: D) {
-    // not using the filename formatting because it's unnecessary
-    // and might cause its own problems.
-    let logfailfile = parse_path(LOG_FAIL_FILE, false);
-    match File::create(&logfailfile) {
-        Ok(mut file)    => {
-            write!(file, "{}", err)
-                .unwrap_or_else(|e| qprinterr!(
-                        "Couldn't log logging error '{}' to {}. ({})",
-                        err, logfailfile, e));
-        },
-        Err(e)  => {
-            qprinterr!("Couldn't open {} to log logging error '{}'. ({})", 
-                      logfailfile, err, e);
-        }
-    }
-}
-
 /// Returns true if we are to daemonize
 #[inline]
 fn is_daemon() -> bool {
@@ -746,146 +478,6 @@ fn init_sigtrap(sigs: &[Signal]) -> (thread::JoinHandle<()>, mpsc::Receiver<Sign
     let (tx, rx) = mpsc::sync_channel::<Signal>(1);
     let handle = thread::spawn(move || tx.send(sigtrap.next().unwrap()).unwrap());
     (handle, rx)
-}
-
-enum OrientatorKind {
-    FsAccel(FilteredFsAccelT),
-    FsAccelRaw(FsAccelT),
-    // IioAccel(FilteredIioAccelT),
-    // IioAccelRaw(IioAccelT),
-    // FaceCam(FaceCamT),
-}
-
-impl Orientator for OrientatorKind {
-    fn orientation(&mut self) -> Option <Rotation> {
-        match self {
-            &mut OrientatorKind::FsAccel(ref mut a) => a.orientation(),
-            &mut OrientatorKind::FsAccelRaw(ref mut a) => a.orientation(),
-            // &mut OrientatorKind::IioAccel(a)    => a.orientation(),
-            // &mut OrientatorKind::FaceCam(c) => c.orientation(),
-        }
-    }
-}
-
-#[allow(dead_code)] // doesn't need to be used, just needs to exist
-struct DummyOrientator();
-impl Orientator for DummyOrientator {
-    fn orientation(&mut self) -> Option<Rotation> {
-        None
-    }
-}
-
-/// Initialize an orientator
-fn init_orientator(mult: f64) -> Result<OrientatorKind,i32> {
-    macro_rules! orinit {
-        ( $tomatch:ident, $opts:ident: $( $name:expr, $init:ident $(, $mult:expr)* );+ $(;)* ) => {
-            match $tomatch.as_str() {
-                $(
-                    $name => {
-                        if ! $opts.contains_key($name) {
-                            $opts.insert($name.to_owned(), HashMap::new());
-                        }
-                        $init($opts.get_mut($name).unwrap() $(, $mult)*)
-                    }),*,
-                    _     => Err(BackendError::NoSuchBackend($tomatch)),
-            }
-        }
-    }
-
-    let (backends, mut opts) = get_backend_options();
-    for backend in backends {
-        let last_output =  orinit!(backend, opts:
-                // "iioaccel", init_iioaccel, Some(mult);
-                // "iioaccel_raw", init_iioaccel, None;
-                // "camaccel", init_camaccel;
-                "fsaccel_raw", init_fsaccel, None;
-                "fsaccel", init_fsaccel, Some(mult);
-                );
-        match last_output {
-            Ok(o)   => return Ok(o),
-            Err(e)  => warn!("Error initializing backend: {}", e),
-        }
-    }
-    return Err(ERR_NO_ORIENTATOR);
-}
-
-// #[cfg(not(feature = "iioaccel"))]
-// fn init_iio
-
-type BackendResult = Result<OrientatorKind, BackendError>;
-
-#[cfg(feature = "fsaccel")]
-/// Initialize a filesystem accelerometer
-fn init_fsaccel(opts: &mut HashMap<String, String>, mult: Option<f64>) -> BackendResult {
-    match mult {
-        Some(m) => Ok(OrientatorKind::FsAccel(FilteredAccelerometer::new(
-                    FsAccel::from_opts(opts).map_err(|e| BackendError::FsAccel(e))?,
-                    m
-                    ))),
-        None    => Ok(OrientatorKind::FsAccelRaw(FsAccel::from_opts(opts).map_err(|e| BackendError::FsAccel(e))?)),
-    }
-}
-
-#[derive(Debug)]
-enum BackendError {
-    /// Backend wasn't compiled in
-    #[allow(dead_code)] // not always compiled
-    NotCompiled(&'static str),
-    /// Backend does not exist
-    NoSuchBackend(String),
-    /// Couldn't find/open filesystem accelerometer files
-    FsAccel(std::io::Error),
-}
-
-/*
- * impl BackendError {
- *     fn backend(&self) -> &str {
- *         use BackendError::*;
- *         match self {
- *             &NotCompiled(ref s) => s,
- *             &NoSuchBackend(ref s)   => &s[..],
- *             &FsAccel(_) => "fsaccel",
- *         }
- *     }
- * }
- */
-
-impl Display for BackendError {
-    fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
-        use BackendError::*;
-        match self {
-            &NotCompiled(b) => {
-                write!(fmt, "backend '{}' is not compiled.", b)
-            },
-            &NoSuchBackend(ref b)   => {
-                write!(fmt, "backend '{}' does not exist!", b)
-            },
-            &FsAccel(ref e) => {
-                write!(fmt, "fsaccel init error: {}", e)
-            },
-        }
-    }
-}
-
-impl std::error::Error for BackendError {
-    fn description(&self) -> &str {
-        "couldn't initialize backend"
-    }
-
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // use BackendError::*;
-        match self {
-            &BackendError::NotCompiled(_)   => None,
-            &BackendError::NoSuchBackend(_) => None,
-            &BackendError::FsAccel(ref e) => Some(e),
-        }
-    }
-}
-
-#[cfg(not(feature = "fsaccel"))]
-/// Don't initiaze a non-compiled filesystem accelerometer
-fn init_fsaccel(_opts: HashMap<String, String>) -> BackendResult {
-    return Err(BackendError::NotCompiled("fsaccel"));
 }
 
 /// Get backend options from command line
@@ -959,34 +551,6 @@ pub trait Orientator {
 }
 
 
-impl<T: Accelerometer> Orientator for T {
-    fn orientation(&mut self) -> Option<Rotation> {
-        let acc = self.read();
-        if (acc.x.abs() - acc.y.abs()).abs() > acc.z.abs() / *SENSITIVITY + 1.4715 {
-            if acc.x.abs() > acc.y.abs() {
-                if acc.x < 0.0 {
-                    trace!("rot: {}; accel: {}", Rotation::Right, acc);
-                    Some(Rotation::Right)
-                } else {
-                    trace!("rot: {}; accel: {}", Rotation::Left, acc);
-                    Some(Rotation::Left)
-                }
-            } else {
-                if acc.y < 0.0 {
-                    trace!("rot: {}; accel: {}", Rotation::Normal, acc);
-                    Some(Rotation::Normal)
-                } else {
-                    trace!("rot: {}; accel: {}", Rotation::Inverted, acc);
-                    Some(Rotation::Inverted)
-                }
-            }
-        } else {
-            trace!("rot: {}; accel: {}", "None (dxy too low)", acc);
-            None
-        }
-    }
-}
-
 #[derive(Debug,PartialEq,Clone,Copy)]
 pub enum Rotation {
     Normal,
@@ -1026,14 +590,6 @@ lazy_static! {
     static ref NOW_LOCAL: DateTime<Local> = Local::now();
 }
 
-/*
- * /// Returns true if we shouldn't write to stdout/stderr
- * // #[inline]
- * fn be_quiet() -> bool {
- *     *IS_QUIET || is_daemon()
- * }
- */
-
 /// Gets the path to the pid file.
 #[inline]
 fn get_pid_file() -> PathBuf {
@@ -1050,6 +606,7 @@ fn get_user() -> daemonize::User {
                     Err(_)  => daemonize::User::from(s)
             })
 }
+
 /// Gets the group spinnrd should run as
 fn get_group() -> daemonize::Group {
     CLI_ARGS.value_of("group")
@@ -1225,7 +782,7 @@ fn get_u32_arg_val(name: &str) -> Option<u32> {
 fn get_f64_arg_val(name: &str) -> Option<f64> {
     if let Some(s) = CLI_ARGS.value_of(name) {
         s.parse::<f64>().map_err(|e|
-                                 warn!("Can't parse '{}' as a uint ({})!", s, e)
+                                 warn!("Can't parse '{}' as a float ({})!", s, e)
                                 )
             .ok()
     } else { None }
