@@ -23,9 +23,9 @@ priority/fun/coolness.
 - [ ] FEEP: Interactive output choice.
 
 ## Overall
-- [ ] Separate backend code into separate file: make it as simple as possible 
-	to add a new backend (as simple as adding a line to a macro 
-invocation?).
+- [x] Separate backend code into separate file: make it as simple as 
+  possible to add a new backend.
+  - [ ] (as simple as adding a line to a macro invocation?).
 - [ ] MOAR DOCUMENTATION! (comments EVERYWHERE).
 - [ ] Systemd service file
 
