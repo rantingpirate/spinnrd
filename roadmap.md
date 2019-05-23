@@ -26,13 +26,17 @@ priority/fun/coolness.
 - [x] Separate backend code into separate file: make it as simple as 
   possible to add a new backend.
   - [ ] (as simple as adding a line to a macro invocation?).
+- [ ] Add frontend selection
 - [ ] MOAR DOCUMENTATION! (comments EVERYWHERE).
 - [ ] Systemd service file
 
-# Long-term
-- [ ] Add iio backend
+# Middle-term
+- [ ] X server frontend
 - [ ] Read options from config file
 - [ ] Other service files?
+
+# Long-term
+- [ ] Add iio backend
 
 ## Packaging
 Because for this to achieve its full potential, it needs to be mostly (or 
