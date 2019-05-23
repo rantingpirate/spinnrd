@@ -18,6 +18,15 @@ cool ideas that are absolutely not part of the core functionality.
 
 ---
 
+# Design Goals
+A list of the things that core goals of this software
+- Reliable (rotates w/in 2sec of being held vertically)
+- Rotates login screen (not just a feature of desktop environment)
+- Efficient (fast language, only one process querying accelerometer)
+- Only rotates as appropriate (if orientation changes 180°, rotation 
+  changes 1x180°, not 2x90°)
+- Flexible (choice of frontends, backends, logging)
+
 # Language
 
 Why Rust? Several reasons, really.
