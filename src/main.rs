@@ -36,6 +36,7 @@ macro_rules! qprinterr {
 
 
 mod logging;
+mod frontend;
 mod backend;
 #[cfg(any(feature = "fsaccel", feature = "iioaccel"))]
 mod accel;
@@ -45,6 +46,7 @@ mod metadata {
 }
 
 
+use frontend::*;
 use backend::*;
 use logging::*;
 
@@ -131,6 +133,12 @@ const DEFAULT_WORKING_DIRECTORY: &'static str = "/run/spinnrd";
 /// The backup working directory
 const BACKUP_WORKING_DIRECTORY: &str = "/tmp";
 
+/// The default frontend options
+const DEFAULT_FRONTEND_OPTS: &'static str = "";
+
+/// The default frontend(s)
+const DEFAULT_FRONTEND: &'static str = "file";
+
 /// The default backend options
 const DEFAULT_BACKEND_OPTS: &'static str = "";
 /// The default backend(s)
@@ -152,14 +160,9 @@ const BACKUP_LOG_FILE: &str = "%d/spinnrd.log";
 /// The file to (try) to write the logging fail message to
 const LOG_FAIL_FILE: &'static str = "/tmp/spinnrd.%t.logfail";
 
-/// Whether to quit by default on spinfile write error
-const DEFAULT_QUIT_ON_SPIN_WRITE_ERR: bool = false;
+/// Whether to quit by default if an error occurs when sending rotation.
+const DEFAULT_QUIT_ON_ROTATION_SEND_ERR: bool = false;
 // this gets logged and it shouldn't really happy anyway.
-
-/// Whether to quit by default on spinfile open error
-const DEFAULT_QUIT_ON_SPIN_OPEN_ERR: bool = true;
-// if we can't communicate there's no point in running...
-
 
 ///# Formatting Arguments
 ///`strftime` string for basic ISO 8601
@@ -167,6 +170,9 @@ const STRF_8601_BASIC: &'static str = "%Y%m%dT%H%M%S%z";
 
 ///`strftime` string for basic ISO 8601, with nanoseconds
 const STRF_8601_BASIC_NS: &'static str = "%Y%m%dT%H%M%S.%f%z";
+
+/// Error indicating no frontend
+const ERR_NO_FRONTEND: i32 = -1314;
 
 /// Error indicating no backend
 const ERR_NO_ORIENTATOR: i32 = -1313;
@@ -364,16 +370,23 @@ fn mainprog() -> i32 {
     } // if is_daemon()
 
 
-    let hyst = get_u32_arg_val("hysteresis").unwrap_or(DEFAULT_HYSTERESIS);
-    let period = get_u32_arg_val("period").unwrap_or(DEFAULT_PERIOD);
-    let delay = get_u32_arg_val("delay").unwrap_or(DEFAULT_DELAY);
-    // a_now = m * (measurement - a_last)
-    // where m is the amount of time we're low-pass filtering over
-    // times the frequency with which we're polling
-    // (AKA the time we're filtering over divided by the period)
-    match init_orientator(period as f64 / (hyst as f64)) {
-        Ok(orientator) => {
-            rval = runloop(orientator, period, delay);
+    match init_frontend() {
+        Ok(frontend)    => {
+            let hyst = get_u32_arg_val("hysteresis").unwrap_or(DEFAULT_HYSTERESIS);
+            let period = get_u32_arg_val("period").unwrap_or(DEFAULT_PERIOD);
+            let delay = get_u32_arg_val("delay").unwrap_or(DEFAULT_DELAY);
+            // a_now = m * (measurement - a_last)
+            // where m is the amount of time we're low-pass filtering over
+            // times the frequency with which we're polling
+            // (AKA the time we're filtering over divided by the period)
+            match init_orientator(period as f64 / (hyst as f64)) {
+                Ok(orientator) => {
+                    rval = runloop(frontend, orientator, period, delay);
+                },
+                Err(e)  => {
+                    rval = e;
+                },
+            }
         },
         Err(e)  => {
             rval = e;
@@ -386,7 +399,13 @@ fn mainprog() -> i32 {
     return rval;
 }
 
-fn runloop(mut orient: OrientatorKind, period: u32, delay: u32) -> i32 {
+fn runloop(
+    mut frontend: FrontendKind,
+    mut orient: OrientatorKind,
+    period: u32,
+    delay: u32
+    ) -> i32
+{
     let (handle, sigrx) = init_sigtrap(&[Signal::SIGHUP,Signal::SIGINT,Signal::SIGTERM]);
 
     let spinfile = get_spinfile();
@@ -427,32 +446,19 @@ fn runloop(mut orient: OrientatorKind, period: u32, delay: u32) -> i32 {
                 last_change_time = Instant::now();
             } else {
                 if last_change != last_written && last_change_time.elapsed() >= delay {
-                    info!("Writing {} to {}", orientation.unwrap(), &spinfile.to_string_lossy());
-                    // Opening the file every write so inotifywait
-                    // is easier (watch for CLOSE_WRITE once instead
-                    // of MODIFY twice (open/truncate and write)).
-                    match File::create(&spinfile) {
-                        // unwrap is safe here because we've already 
-                        // checked
-                        // that orientation isn't none
-                        Ok(mut f)   => match write!(f, "{}", orientation.unwrap()) {
-                            Ok(_)   => {last_written = orientation;},
-                            Err(e)  => {
-                                error!("Error writing to spinfile! ({})", e);
-                                if quit_on_spinfile_write_error() {
-                                    rval = 5;
-                                    break 'mainloop
-                                }
-                            }
-                        }, // match write!
+                    info!("Writing {} to {}", orientation.unwrap(), frontend);
+                    // `unwrap` is safe here because we've already checked 
+                    // that orientation isn't None.
+                    match frontend.send(orientation.unwrap()) {
+                        Ok(_)   => { last_written = orientation; },
                         Err(e)  => {
-                            error!("Error opening spinfile! ({})", e);
-                            if quit_on_spinfile_open_error() { // This defaults to true!
+                            error!("Error sending rotation! ({})", e);
+                            if quit_on_rotation_send_error() {
                                 rval = 4;
                                 break 'mainloop
                             }
                         }
-                    } // match File::create(spinfile)
+                    }
                 } // if last_change_time.elapsed() >= delay
             } // if last_change != orientation
         } // if orientation.is_some()
@@ -478,6 +484,47 @@ fn init_sigtrap(sigs: &[Signal]) -> (thread::JoinHandle<()>, mpsc::Receiver<Sign
     let (tx, rx) = mpsc::sync_channel::<Signal>(1);
     let handle = thread::spawn(move || tx.send(sigtrap.next().unwrap()).unwrap());
     (handle, rx)
+}
+
+/// Get frontend options from command line
+fn get_frontend_options() -> (Vec<String>, HashMap<String, HashMap<String, String>>) {
+    lazy_static! {
+        static ref FRONTEND_RE: Regex = Regex::new(r"^(?x)
+        (?P<frontend>\w+)
+        (?P<options>,
+            (?:
+                (?:[^;]*[^;\\])?
+                (?:\\\\)*
+                \\;
+            )*
+            [^;]+
+        )?").unwrap();
+    }
+    let mut frontlist = Vec::new();
+    let mut optmap = HashMap::new();
+    let frontends = CLI_ARGS.value_of("frontend").unwrap_or(DEFAULT_FRONTEND);
+    let frontend_options = CLI_ARGS.value_of("frontend_opts").unwrap_or(DEFAULT_FRONTEND_OPTS);
+    for caps in FRONTEND_RE.captures_iter(frontend_options) {
+        let frontend = &caps["frontend"];
+        if ! optmap.contains_key(frontend) {
+            optmap.insert(frontend.to_owned(), HashMap::new());
+        }
+        parse_options(
+            &caps.name("options").map(|m| m.as_str()).unwrap_or(""),
+            optmap.get_mut(frontend).unwrap());
+    }
+    for caps in FRONTEND_RE.captures_iter(frontends) {
+        let frontend = &caps["frontend"];
+        if ! optmap.contains_key(frontend) {
+            optmap.insert(frontend.to_owned(), HashMap::new());
+        }
+        frontlist.push(frontend.to_owned());
+        parse_options(
+            &caps.name("options").map(|m| m.as_str()).unwrap_or(""),
+            optmap.get_mut(frontend).unwrap());
+
+    }
+    return (frontlist,optmap)
 }
 
 /// Get backend options from command line
@@ -807,17 +854,10 @@ fn validate_f64(v: String) -> Result<(), String> {
 }
 
 /// Returns true if we should quit if an error occurs
-/// when writing to the spinfile
-fn quit_on_spinfile_write_error() -> bool {
+/// when sending rotation.
+fn quit_on_rotation_send_error() -> bool {
     //TODO: addopt //addopt means add command line option
-    DEFAULT_QUIT_ON_SPIN_WRITE_ERR
-}
-
-/// Returns true if we should quit if an error occurs
-/// when opening the spinfile
-fn quit_on_spinfile_open_error() -> bool {
-    //TODO: addopt
-    DEFAULT_QUIT_ON_SPIN_OPEN_ERR
+    DEFAULT_QUIT_ON_ROTATION_SEND_ERR
 }
 
 /// Remove the pid file at `p`.
