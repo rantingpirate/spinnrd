@@ -6,12 +6,13 @@ use super::*;
 
 use std::io::Error as IoError;
 use std::fs::File;
+use std::io::Write;
 
 
 // #[cfg(feature = "x11")]
 // type XSender = ???;
-#[cfg(not(feature = "x11"))]
-type XSender = DummySender;
+// #[cfg(not(feature = "x11"))]
+// type XSender = DummySender;
 
 type SendResult = Result<(), SendError>;
 
@@ -29,7 +30,7 @@ fn file_sender_help() -> String {
         
 
 #[derive(Debug)]
-enum SendError {
+pub enum SendError {
     IoError(IoError),
 }
 
@@ -74,6 +75,17 @@ impl Frontend for FrontendKind {
     }
 }
 
+impl std::fmt::Display for FrontendKind {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            &FrontendKind::File(ref fs)   => {
+                write!(fmt, "FileSender to {}", fs.to_string_lossy())
+            },
+        }
+    }
+}
+
+#[allow(dead_code)]
 pub struct DummySender();
 
 
@@ -111,7 +123,8 @@ impl Frontend for FileSender {
 
 #[derive(Debug)]
 /// Represents an error initializing a frontend
-enum FrontendError {
+pub enum FrontendError {
+    #[allow(dead_code)]
     NotCompiled(&'static str),
     NoSuchFrontend(String),
     FileSender(IoError, PathBuf),
@@ -181,8 +194,9 @@ pub fn init_frontend() -> Result<FrontendKind, i32> {
 }
 
 fn init_file(opts: &mut HashMap<String, String>) -> InitResult<FrontendKind> {
+    let def = DEFAULT_SPINFILE.to_owned();
     Ok(FrontendKind::File(FileSender::init(
-        PathBuf::from(parse_path(opts.get("path").unwrap_or_else(|| &DEFAULT_SPINFILE.to_owned()),false))
+        PathBuf::from(parse_path(opts.get("path").unwrap_or(&def),false))
         )?))
 }
 

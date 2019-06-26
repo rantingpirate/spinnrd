@@ -58,7 +58,8 @@ use std::sync::mpsc;
 use std::fs::{File,remove_file,OpenOptions};
 // use std::ffi::CStr;
 // use std::os::unix::io::AsRawFd;
-use std::io::Write;
+// #[allow(unused_imports)] // for File.write()
+// use std::io::Write;
 use std::path::{PathBuf};
 use std::io::Error as IoError;
 // use std::io::ErrorKind as IoErrorKind;
@@ -202,8 +203,11 @@ Filenames accept a few variables that will be expanded as follows:
         details). Use '%}}' to embed a '}}' in the format string.
 
 BACKEND OPTIONS
-The available backend options are as follows:{}\n
-",chrono_ver(),backend_help());
+The available backend options are as follows:{}
+
+FRONTEND OPTIONS
+The available frontend options are as follows:{}
+",chrono_ver(),backend_help(),frontend_help());
 }
 
 // the part where we define the command line arguments
@@ -302,6 +306,19 @@ lazy_static!{
              .multiple(true)
              .number_of_values(1)
              .help("Set options for various backends without changing which backend(s) to use.")
+             )
+        .arg(Arg::with_name("frontend")
+             .long("frontend")
+             .value_name("FRONTEND[[,OPT=VALUE]...][;FRONTEND[[,OPT=VALUE]...]]")
+             .value_delimiter(";")
+             .help("Choose which frontend(s) to get data from and set options")
+             )
+        .arg(Arg::with_name("frontend_opts")
+             .long("frontend-options")
+             .value_name("FRONTEND[,[OPT]...]")
+             .multiple(true)
+             .number_of_values(1)
+             .help("Set options for various frontends without changing which frontend(s) to use.")
              )
         .arg(Arg::with_name("loglvl")
              .long("log-level")
@@ -408,7 +425,6 @@ fn runloop(
 {
     let (handle, sigrx) = init_sigtrap(&[Signal::SIGHUP,Signal::SIGINT,Signal::SIGTERM]);
 
-    let spinfile = get_spinfile();
     // period is in ms, so multiply by 10^6 to get ns
     let period = Duration::new(
         (period / PERIOD_SEC_DIV) as u64,
@@ -680,12 +696,6 @@ fn get_group() -> daemonize::Group {
  *     String::new();
  * }
  */
-
-/// Get the location of the spinfile
-#[inline]
-fn get_spinfile() -> PathBuf {
-    get_path("spinfile", DEFAULT_SPINFILE, false)
-}
 
 macro_rules! timef {
     ( $now:ident, $str:expr, $($func:ident),* ) => {

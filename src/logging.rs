@@ -7,6 +7,7 @@ use systemd::journal::JournalLog;
 
 use log::{LevelFilter,SetLoggerError};
 use simplelog::WriteLogger;
+use std::io::Write;
 
 
 /// The type returned by init_logger upon failure to initialize a logger.
