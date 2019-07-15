@@ -28,7 +28,7 @@ priority/fun/coolness.
   - [ ] \(as simple as adding a line to a macro invocation?).
 - [x] Add frontend selection
 - [ ] MOAR DOCUMENTATION! (comments EVERYWHERE).
-- [ ] Systemd service file
+- [x] Systemd service file
 
 # Middle-term
 - [ ] X server frontend

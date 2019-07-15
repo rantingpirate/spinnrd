@@ -1,0 +1,10 @@
+[Unit]
+Description="The Accelerometer Interpretation Daemon"
+
+[Service]
+Type=forking
+PIDFile=/run/spinnrd/spinnrd.pid
+ExecStart=/usr/local/bin/spinnrd -qD --working-directory=/run/spinnrd
+
+[Install]
+WantedBy=graphical.target
