@@ -25,8 +25,8 @@ priority/fun/coolness.
 ## Overall
 - [x] Separate backend code into separate file: make it as simple as 
   possible to add a new backend.
-  - [ ] (as simple as adding a line to a macro invocation?).
-- [ ] Add frontend selection
+  - [ ] \(as simple as adding a line to a macro invocation?).
+- [x] Add frontend selection
 - [ ] MOAR DOCUMENTATION! (comments EVERYWHERE).
 - [ ] Systemd service file
 
