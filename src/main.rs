@@ -296,7 +296,7 @@ lazy_static!{
             )
         .arg(Arg::with_name("backend")
              .long("backend")
-             .value_name("BACKEND[[,OPT=VALUE]...][;BACKEND[[,OPT=VALUE]...]]")
+             .value_name("BACKEND[[,OPT=VALUE]...][;BACKEND[[,OPT=VALUE]...]]...")
              .value_delimiter(";")
              .help("Choose which backend(s) to get data from and set options")
              )

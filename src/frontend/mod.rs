@@ -24,7 +24,7 @@ fn file_sender_help() -> String {
     format!("
     For File:
         path: The path to the spinfile. Defaults to {}.\n",
-        parse_path(DEFAULT_SPINFILE, false)
+        DEFAULT_SPINFILE
         )
 }
         
