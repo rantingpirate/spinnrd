@@ -10,7 +10,8 @@ display to rotate.
 
 ### Arch Linux
 
-AUR: [spinnrd-git](https://aur.archlinux.org/packages/spinnrd-git/)
+From the AUR:
+- [spinnrd-git](https://aur.archlinux.org/packages/spinnrd-git/)
 
 With `yay`:
 ```bash
@@ -21,6 +22,9 @@ yay -S spinnrd-git
 
 Ensure to start/enable the `spinnrd.service` systemd service, and add the
 `/usr/share/spinnr/spinnr.sh` script to your desktop's auto-start applications.
+The default spinfile location to specify as an argument to the script will be
+found in `/run/spinnrd/spinnrd.spin` (_e.g. `/usr/share/spinnr/spinnr.sh
+/run/spinnrd/spinnrd.spin`_)
 
 ## Requirements
 ### Building
